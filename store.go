@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/brunoga/deep/v3/crdt"
@@ -17,7 +18,7 @@ type Store struct {
 	mu     sync.RWMutex
 	db     *sql.DB
 	crdt   *crdt.CRDT[BoardState]
-	subs   map[chan []byte]bool
+	subs   map[chan WSMessage]bool
 	peers  []string
 	nodeID string
 }
@@ -46,7 +47,7 @@ func NewStore(dbPath string, nodeID string, peers []string) (*Store, error) {
 
 	s := &Store{
 		db:     db,
-		subs:   make(map[chan []byte]bool),
+		subs:   make(map[chan WSMessage]bool),
 		peers:  peers,
 		nodeID: nodeID,
 	}
@@ -99,7 +100,10 @@ func (s *Store) ApplyDelta(delta crdt.Delta[BoardState]) error {
 		log.Printf("Applied delta from remote: %s", delta.Patch.Summary())
 		s.saveState()
 		s.savePatch(delta)
-		s.broadcast(&delta)
+		// Remote updates for cursors/connections are silent
+		summary := delta.Patch.Summary()
+		silent := strings.Contains(summary, "Cursors") || strings.Contains(summary, "nodeConnections")
+		s.Broadcast(WSMessage{Type: "refresh", Silent: silent})
 	}
 	return nil
 }
@@ -112,7 +116,7 @@ func (s *Store) Edit(fn func(*BoardState)) crdt.Delta[BoardState] {
 	if delta.Patch != nil {
 		s.saveState()
 		s.savePatch(delta)
-		s.broadcast(&delta)
+		s.Broadcast(WSMessage{Type: "refresh"})
 		go s.syncToPeers(delta)
 	}
 	return delta
@@ -125,7 +129,8 @@ func (s *Store) SilentEdit(fn func(*BoardState)) {
 	delta := s.crdt.Edit(fn)
 	if delta.Patch != nil {
 		s.saveState()
-		// We don't save patches or broadcast for silent edits
+		s.Broadcast(WSMessage{Type: "refresh", Silent: true})
+		go s.syncToPeers(delta)
 	}
 }
 
@@ -161,7 +166,7 @@ func (s *Store) Merge(other *crdt.CRDT[BoardState]) bool {
 	if s.crdt.Merge(other) {
 		log.Printf("Merged state from remote")
 		s.saveState()
-		s.broadcast(nil) // Trigger refresh
+		s.Broadcast(WSMessage{Type: "refresh"}) // Merge is always a full refresh
 		return true
 	}
 	return false
@@ -191,7 +196,7 @@ func (s *Store) ClearHistory() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.db.Exec("DELETE FROM patches")
-	s.broadcast(nil)
+	s.Broadcast(WSMessage{Type: "refresh"})
 }
 
 func (s *Store) saveState() {
@@ -207,8 +212,8 @@ func (s *Store) savePatch(delta crdt.Delta[BoardState]) {
 		delta.Timestamp.String(), patchData, summary)
 }
 
-func (s *Store) Subscribe() chan []byte {
-	ch := make(chan []byte, 10)
+func (s *Store) Subscribe() chan WSMessage {
+	ch := make(chan WSMessage, 10)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -218,7 +223,7 @@ func (s *Store) Subscribe() chan []byte {
 	return ch
 }
 
-func (s *Store) Unsubscribe(ch chan []byte) {
+func (s *Store) Unsubscribe(ch chan WSMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -256,7 +261,8 @@ func (s *Store) updateConnectionsLocked(count int) {
 	})
 	if delta.Patch != nil {
 		s.saveState()
-		// Internal updates are silent by default
+		s.Broadcast(WSMessage{Type: "refresh", Silent: true})
+		go s.syncToPeers(delta)
 	}
 }
 
@@ -272,22 +278,15 @@ func (s *Store) removeCursor(id string) {
 	})
 }
 
-func (s *Store) broadcast(delta *crdt.Delta[BoardState]) {
-	var data []byte
-	if delta != nil {
-		data, _ = json.Marshal(delta)
-	} else {
-		data, _ = json.Marshal(map[string]string{"type": "refresh"})
-	}
-
+func (s *Store) Broadcast(msg WSMessage) {
 	subCount := len(s.subs)
-	if subCount > 0 {
+	if subCount > 0 && !msg.Silent {
 		log.Printf("Broadcasting refresh to %d subscribers", subCount)
 	}
 
 	for ch := range s.subs {
 		select {
-		case ch <- data:
+		case ch <- msg:
 		default:
 		}
 	}

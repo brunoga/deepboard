@@ -198,7 +198,7 @@ func handleSync(s *Store) http.HandlerFunc {
 		}
 		if delta.Patch == nil {
 			// Triggered broadcast from Merge
-			s.broadcast(nil)
+			s.Broadcast(WSMessage{Type: "refresh"})
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -278,33 +278,6 @@ func handleHistory(s *Store) http.HandlerFunc {
 	}
 }
 
-type WSMessage struct {
-	Type   string    `json:"type"`
-	Move   *MoveOp   `json:"move,omitempty"`
-	TextOp *TextOp   `json:"textOp,omitempty"`
-	Delete *DeleteOp `json:"delete,omitempty"`
-	Cursor *Cursor   `json:"cursor,omitempty"`
-}
-
-type MoveOp struct {
-	CardID  string `json:"cardId"`
-	FromCol string `json:"from"`
-	ToCol   string `json:"to"`
-	ToIndex int    `json:"toIndex"`
-}
-
-type TextOp struct {
-	CardID string `json:"cardId"`
-	Op     string `json:"op"`
-	Pos    int    `json:"pos"`
-	Val    string `json:"val"`
-	Length int    `json:"length"`
-}
-
-type DeleteOp struct {
-	CardID string `json:"cardId"`
-}
-
 func handleWS(s *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -322,9 +295,11 @@ func handleWS(s *Store) http.HandlerFunc {
 		defer s.Unsubscribe(sub)
 
 		go func() {
-			for range sub {
-				log.Printf("Refresh triggered for client %s", connID)
-				conn.WriteJSON(WSMessage{Type: "refresh"})
+			for msg := range sub {
+				if !msg.Silent {
+					log.Printf("Refresh triggered for client %s", connID)
+				}
+				conn.WriteJSON(msg)
 			}
 		}()
 
@@ -593,7 +568,8 @@ const indexHTML = `
             socket = new WebSocket(protocol + '//' + window.location.host + '/ws');
             socket.onopen = () => refreshUI();
             socket.onmessage = (e) => {
-                if (JSON.parse(e.data).type === 'refresh') refreshUI();
+                const msg = JSON.parse(e.data);
+                if (msg.type === 'refresh' && !msg.silent) refreshUI();
             };
             socket.onclose = () => setTimeout(connect, 1000);
         }

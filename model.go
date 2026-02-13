@@ -43,6 +43,34 @@ type BoardState struct {
 	Cursors         []Cursor         `json:"cursors"`
 }
 
+type WSMessage struct {
+	Type   string    `json:"type"`
+	Silent bool      `json:"silent,omitempty"`
+	Move   *MoveOp   `json:"move,omitempty"`
+	TextOp *TextOp   `json:"textOp,omitempty"`
+	Delete *DeleteOp `json:"delete,omitempty"`
+	Cursor *Cursor   `json:"cursor,omitempty"`
+}
+
+type MoveOp struct {
+	CardID  string `json:"cardId"`
+	FromCol string `json:"from"`
+	ToCol   string `json:"to"`
+	ToIndex int    `json:"toIndex"`
+}
+
+type TextOp struct {
+	CardID string `json:"cardId"`
+	Op     string `json:"op"`
+	Pos    int    `json:"pos"`
+	Val    string `json:"val"`
+	Length int    `json:"length"`
+}
+
+type DeleteOp struct {
+	CardID string `json:"cardId"`
+}
+
 func NewInitialBoard() BoardState {
 	return BoardState{
 		Board: Board{
