@@ -83,6 +83,8 @@ const stickyCookieName = "SERVERID"
 func lbHandler(w http.ResponseWriter, r *http.Request) {
 	var backend *Backend
 
+	log.Printf("Request: %s %s [Upgrade: %s]", r.Method, r.URL.Path, r.Header.Get("Upgrade"))
+
 	// Check for sticky cookie
 	if cookie, err := r.Cookie(stickyCookieName); err == nil {
 		backend = serverPool.GetBackendByURL(cookie.Value)
@@ -103,6 +105,10 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 			Value: backend.URL.String(),
 			Path:  "/",
 		})
+	}
+
+	if strings.ToLower(r.Header.Get("Upgrade")) == "websocket" {
+		log.Printf("Upgrading to WebSocket for backend: %s", backend.URL.String())
 	}
 
 	backend.ReverseProxy.ServeHTTP(w, r)
@@ -168,7 +174,7 @@ func refreshBackends(serviceName string) {
 		if err != nil {
 			return
 		}
-		
+
 		for _, ip := range ips {
 			u := &url.URL{
 				Scheme: "http",

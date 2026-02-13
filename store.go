@@ -109,6 +109,7 @@ func (s *Store) Edit(fn func(*BoardState)) crdt.Delta[BoardState] {
 func (s *Store) syncToPeers(delta crdt.Delta[BoardState]) {
 	data, err := json.Marshal(delta)
 	if err != nil {
+		log.Printf("Failed to marshal delta for sync: %v", err)
 		return
 	}
 
@@ -122,6 +123,7 @@ func (s *Store) syncToPeers(delta crdt.Delta[BoardState]) {
 			url := fmt.Sprintf("http://%s/api/sync", p)
 			resp, err := http.Post(url, "application/json", bytes.NewReader(data))
 			if err != nil {
+				log.Printf("Failed to sync with peer %s: %v", p, err)
 				return
 			}
 			resp.Body.Close()
@@ -169,7 +171,7 @@ func (s *Store) saveState() {
 func (s *Store) savePatch(delta crdt.Delta[BoardState]) {
 	patchData, _ := json.Marshal(delta)
 	summary := delta.Patch.Summary()
-	s.db.Exec("INSERT INTO patches (timestamp, patch, summary) VALUES (?, ?, ?)", 
+	s.db.Exec("INSERT INTO patches (timestamp, patch, summary) VALUES (?, ?, ?)",
 		delta.Timestamp.String(), patchData, summary)
 }
 

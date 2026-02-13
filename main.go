@@ -18,10 +18,10 @@ import (
 )
 
 var (
-	addr   = flag.String("addr", ":8080", "http service address")
-	dbPath = flag.String("db", "deepboard.db", "path to sqlite database")
-	peers  = flag.String("peers", "", "comma-separated list of peer addresses")
-	nodeID = flag.String("node-id", uuid.New().String(), "unique identifier for this node")
+	addr          = flag.String("addr", ":8080", "http service address")
+	dbPath        = flag.String("db", "deepboard.db", "path to sqlite database")
+	peers         = flag.String("peers", "", "comma-separated list of peer addresses")
+	nodeID        = flag.String("node-id", uuid.New().String(), "unique identifier for this node")
 	nodeIDFromEnv = flag.Bool("node-id-from-env", false, "use NODE_ID_ENV environment variable for node ID")
 )
 
@@ -76,6 +76,7 @@ func main() {
 }
 
 func discoverPeers(s *Store, serviceName string) {
+	log.Printf("Starting peer discovery for service: %s", serviceName)
 	for {
 		ips, err := net.LookupIP(serviceName)
 		if err == nil {
@@ -84,7 +85,10 @@ func discoverPeers(s *Store, serviceName string) {
 				peerAddr := fmt.Sprintf("%s:8080", ip.String())
 				newPeers = append(newPeers, peerAddr)
 			}
+			log.Printf("Discovered %d peers: %v", len(newPeers), newPeers)
 			s.UpdatePeers(newPeers)
+		} else {
+			log.Printf("Peer discovery failed: %v", err)
 		}
 		time.Sleep(30 * time.Second)
 	}
@@ -246,8 +250,10 @@ func handleWS(s *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
+			log.Printf("WebSocket upgrade failed: %v", err)
 			return
 		}
+		log.Printf("WebSocket connected: %s", r.RemoteAddr)
 		defer conn.Close()
 
 		sub := s.Subscribe()
@@ -284,6 +290,7 @@ func handleWS(s *Store) http.HandlerFunc {
 }
 
 func handleMoveInternal(s *Store, op *MoveOp) {
+	log.Printf("Processing move: Card %s from %s to %s (index %d)", op.CardID, op.FromCol, op.ToCol, op.ToIndex)
 	s.Edit(func(bs *BoardState) {
 		var card Card
 		var found bool
@@ -325,6 +332,7 @@ func handleMoveInternal(s *Store, op *MoveOp) {
 }
 
 func handleTextOpInternal(s *Store, op *TextOp) {
+	log.Printf("Processing textOp: Card %s, Op %s, Pos %d", op.CardID, op.Op, op.Pos)
 	s.Edit(func(bs *BoardState) {
 		for ci, col := range bs.Board.Columns {
 			for ri, card := range col.Cards {
@@ -342,6 +350,7 @@ func handleTextOpInternal(s *Store, op *TextOp) {
 }
 
 func handleDeleteInternal(s *Store, op *DeleteOp) {
+	log.Printf("Processing delete: Card %s", op.CardID)
 	s.Edit(func(bs *BoardState) {
 		for ci, col := range bs.Board.Columns {
 			for ri, card := range col.Cards {
@@ -468,7 +477,8 @@ const indexHTML = `
     <script>
         let socket;
         function connect() {
-            socket = new WebSocket('ws://' + window.location.host + '/ws');
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            socket = new WebSocket(protocol + '//' + window.location.host + '/ws');
             socket.onopen = () => refreshUI();
             socket.onmessage = (e) => {
                 if (JSON.parse(e.data).type === 'refresh') refreshUI();

@@ -9,7 +9,7 @@ import (
 func setupTestStore(t *testing.T, name string, nodeID string) (*Store, func()) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, name+".db")
-	
+
 	store, err := NewStore(dbPath, nodeID, nil)
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
