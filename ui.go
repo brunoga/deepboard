@@ -8,7 +8,7 @@ const boardHTML = `
     <div class="card-list" id="col-{{.ID}}" data-col-id="{{.ID}}">
         {{range .Cards}}
         {{$cardID := .ID}}
-        <div class="card" data-id="{{.ID}}">
+        <div class="card" data-id="{{.ID}}" onclick="sendCursor('{{.ID}}', 0, event)">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                 <span class="card-title">{{.Title}}</span>
                 <button onclick="deleteCard('{{.ID}}')" class="delete-btn">&times;</button>
@@ -273,27 +273,31 @@ const indexHTML = `
             });
         }
 
+        let cursorTimeout;
+        function sendCursor(cardId, pos, event) {
+            if (event && (event.target.tagName === 'BUTTON' || event.target.tagName === 'TEXTAREA')) return;
+            if (cursorTimeout) return;
+            cursorTimeout = setTimeout(() => {
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({
+                        type: 'cursor',
+                        cursor: { cardId: cardId, pos: pos }
+                    }));
+                }
+                cursorTimeout = null;
+            }, 200); // Throttle cursors to 5fps
+        }
+
         function initTextareas() {
             document.querySelectorAll('.card-desc').forEach(el => {
                 let inputTimeout;
-                let cursorTimeout;
+                const cardId = el.id.slice(5);
                 
-                const sendCursor = () => {
-                    if (cursorTimeout) return;
-                    cursorTimeout = setTimeout(() => {
-                        socket.send(JSON.stringify({
-                            type: 'cursor',
-                            cursor: { cardId: el.id.slice(5), pos: el.selectionStart }
-                        }));
-                        cursorTimeout = null;
-                    }, 200); // Throttle cursors to 5fps
-                };
+                const updateCursor = () => sendCursor(cardId, el.selectionStart);
 
-                el.onfocus = sendCursor;
-                el.onclick = sendCursor;
-                el.onkeyup = (e) => {
-                    sendCursor();
-                };
+                el.onfocus = updateCursor;
+                el.onclick = (e) => { e.stopPropagation(); updateCursor(); };
+                el.onkeyup = updateCursor;
 
                 el.oninput = () => {
                     lastInputTime[el.id] = Date.now();
