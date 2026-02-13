@@ -17,6 +17,13 @@ type NodeConnection struct {
 	Count  int    `json:"count"`
 }
 
+type Cursor struct {
+	ID     string `deep:"key" json:"id"`
+	CardID string `json:"cardId"`
+	Pos    int    `json:"pos"`
+	NodeID string `json:"nodeId"`
+}
+
 type Column struct {
 	ID    string `deep:"key" json:"id"`
 	Title string `json:"title"`
@@ -33,6 +40,7 @@ type Board struct {
 type BoardState struct {
 	Board           Board            `json:"board"`
 	NodeConnections []NodeConnection `json:"nodeConnections"`
+	Cursors         []Cursor         `json:"cursors"`
 }
 
 func NewInitialBoard() BoardState {
@@ -67,5 +75,6 @@ func NewInitialBoard() BoardState {
 			},
 		},
 		NodeConnections: []NodeConnection{},
+		Cursors:         []Cursor{},
 	}
 }

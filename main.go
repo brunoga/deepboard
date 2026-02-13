@@ -169,12 +169,14 @@ func handleIndex(s *Store) http.HandlerFunc {
 			History    []string
 			LocalCount int
 			TotalCount int
+			Cursors    []Cursor
 		}{
 			NodeID:     *nodeID,
 			Board:      state.Board,
 			History:    s.GetHistory(15),
 			LocalCount: localCount,
 			TotalCount: totalCount,
+			Cursors:    state.Cursors,
 		}
 		tmpl.Execute(w, data)
 	}
@@ -207,7 +209,7 @@ func handleBoard(s *Store) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		tmpl.Execute(w, s.GetBoard().Board)
+		tmpl.Execute(w, s.GetBoard())
 	}
 }
 
@@ -225,6 +227,7 @@ type WSMessage struct {
 	Move   *MoveOp   `json:"move,omitempty"`
 	TextOp *TextOp   `json:"textOp,omitempty"`
 	Delete *DeleteOp `json:"delete,omitempty"`
+	Cursor *Cursor   `json:"cursor,omitempty"`
 }
 
 type MoveOp struct {
@@ -256,6 +259,9 @@ func handleWS(s *Store) http.HandlerFunc {
 		log.Printf("WebSocket connected: %s", r.RemoteAddr)
 		defer conn.Close()
 
+		connID := uuid.New().String()
+		defer s.removeCursor(connID)
+
 		sub := s.Subscribe()
 		defer s.Unsubscribe(sub)
 
@@ -284,9 +290,32 @@ func handleWS(s *Store) http.HandlerFunc {
 				if msg.Delete != nil {
 					handleDeleteInternal(s, msg.Delete)
 				}
+			case "cursor":
+				if msg.Cursor != nil {
+					msg.Cursor.ID = connID
+					msg.Cursor.NodeID = *nodeID
+					handleCursorInternal(s, msg.Cursor)
+				}
 			}
 		}
 	}
+}
+
+func handleCursorInternal(s *Store, op *Cursor) {
+	s.Edit(func(bs *BoardState) {
+		found := false
+		for i, c := range bs.Cursors {
+			if c.ID == op.ID {
+				bs.Cursors[i].CardID = op.CardID
+				bs.Cursors[i].Pos = op.Pos
+				found = true
+				break
+			}
+		}
+		if !found {
+			bs.Cursors = append(bs.Cursors, *op)
+		}
+	})
 }
 
 func handleMoveInternal(s *Store, op *MoveOp) {
@@ -379,11 +408,13 @@ func handleAdd(store *Store) http.HandlerFunc {
 }
 
 const boardHTML = `
-{{range .Columns}}
+{{$cursors := .Cursors}}
+{{range .Board.Columns}}
 <div class="column">
     <h3>{{.Title}}</h3>
     <div class="card-list" id="col-{{.ID}}" data-col-id="{{.ID}}">
         {{range .Cards}}
+        {{$cardID := .ID}}
         <div class="card" data-id="{{.ID}}">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                 <span class="card-title">{{.Title}}</span>
@@ -391,6 +422,13 @@ const boardHTML = `
             </div>
             <textarea class="card-desc" id="desc-{{.ID}}" placeholder="Add a description..."
                       data-last-value="{{.Description.String}}">{{.Description.String}}</textarea>
+            <div class="presence-list">
+                {{range $cursors}}
+                    {{if eq .CardID $cardID}}
+                        <span class="presence-tag" title="User {{.ID}}">👤 {{slice .ID 0 4}}</span>
+                    {{end}}
+                {{end}}
+            </div>
         </div>
         {{end}}
     </div>
@@ -443,6 +481,9 @@ const indexHTML = `
         .add-card-form input { padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; flex: 1; font-size: 0.9rem; }
         .add-card-form button { padding: 8px 16px; background: #2ecc71; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: background 0.2s; }
         .add-card-form button:hover { background: #27ae60; }
+
+        .presence-list { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+        .presence-tag { font-size: 0.7rem; background: #e0e0e0; padding: 2px 6px; border-radius: 4px; color: #666; }
     </style>
 </head>
 <body>
@@ -461,7 +502,7 @@ const indexHTML = `
     
     <div class="main-container">
         <div class="board" id="board">
-            ` + "{{with .Board}}" + boardHTML + "{{end}}" + `
+            ` + "{{with .}}" + boardHTML + "{{end}}" + `
         </div>
 
         <div class="sidebar">
@@ -540,7 +581,18 @@ const indexHTML = `
         function initTextareas() {
             document.querySelectorAll('.card-desc').forEach(el => {
                 let timeout;
+                const sendCursor = () => {
+                    socket.send(JSON.stringify({
+                        type: 'cursor',
+                        cursor: { cardId: el.id.slice(5), pos: el.selectionStart }
+                    }));
+                };
+                el.onfocus = sendCursor;
+                el.onclick = sendCursor;
+                el.onkeyup = sendCursor;
+
                 el.oninput = () => {
+                    sendCursor();
                     clearTimeout(timeout);
                     timeout = setTimeout(() => {
                         const old = el.dataset.lastValue || "", val = el.value;

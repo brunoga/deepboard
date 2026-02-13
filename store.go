@@ -220,6 +220,18 @@ func (s *Store) updateConnections(count int) {
 	})
 }
 
+func (s *Store) removeCursor(id string) {
+	s.Edit(func(bs *BoardState) {
+		newCursors := []Cursor{}
+		for _, c := range bs.Cursors {
+			if c.ID != id {
+				newCursors = append(newCursors, c)
+			}
+		}
+		bs.Cursors = newCursors
+	})
+}
+
 func (s *Store) broadcast(delta *crdt.Delta[BoardState]) {
 	var data []byte
 	if delta != nil {
