@@ -66,7 +66,9 @@ func NewStore(dbPath string, nodeID string, peers []string) (*Store, error) {
 		}
 	}
 
-	s.updateConnections(0)
+	s.mu.Lock()
+	s.updateConnectionsLocked(0)
+	s.mu.Unlock()
 
 	return s, nil
 }
@@ -75,6 +77,14 @@ func (s *Store) UpdatePeers(peers []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.peers = peers
+}
+
+func (s *Store) GetPeers() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	p := make([]string, len(s.peers))
+	copy(p, s.peers)
+	return p
 }
 
 func (s *Store) GetBoard() BoardState {
@@ -200,30 +210,35 @@ func (s *Store) savePatch(delta crdt.Delta[BoardState]) {
 func (s *Store) Subscribe() chan []byte {
 	ch := make(chan []byte, 10)
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.subs[ch] = true
 	count := len(s.subs)
-	s.mu.Unlock()
-
-	s.updateConnections(count)
+	s.updateConnectionsLocked(count)
 	return ch
 }
 
 func (s *Store) Unsubscribe(ch chan []byte) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if _, ok := s.subs[ch]; !ok {
-		s.mu.Unlock()
 		return
 	}
 	delete(s.subs, ch)
 	close(ch)
 	count := len(s.subs)
-	s.mu.Unlock()
-
-	s.updateConnections(count)
+	s.updateConnectionsLocked(count)
 }
 
-func (s *Store) updateConnections(count int) {
-	s.SilentEdit(func(bs *BoardState) {
+func (s *Store) UpdateConnections(count int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.updateConnectionsLocked(count)
+}
+
+func (s *Store) updateConnectionsLocked(count int) {
+	delta := s.crdt.Edit(func(bs *BoardState) {
 		found := false
 		for i, nc := range bs.NodeConnections {
 			if nc.NodeID == s.nodeID {
@@ -239,6 +254,10 @@ func (s *Store) updateConnections(count int) {
 			})
 		}
 	})
+	if delta.Patch != nil {
+		s.saveState()
+		// Internal updates are silent by default
+	}
 }
 
 func (s *Store) removeCursor(id string) {

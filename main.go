@@ -81,23 +81,17 @@ func main() {
 func startConnectionCleanup(s *Store) {
 	ticker := time.NewTicker(1 * time.Minute)
 	for range ticker.C {
+		currentPeers := s.GetPeers()
+		peerMap := make(map[string]bool)
+		for _, p := range currentPeers {
+			host := strings.Split(p, ":")[0]
+			peerMap[host] = true
+		}
+		peerMap[*nodeID] = true
+
 		s.SilentEdit(func(bs *BoardState) {
-			s.mu.RLock()
-			currentPeers := make([]string, len(s.peers))
-			copy(currentPeers, s.peers)
-			s.mu.RUnlock()
-
-			peerMap := make(map[string]bool)
-			for _, p := range currentPeers {
-				// peers are host:port, we want to match NodeID which is usually HOSTNAME
-				host := strings.Split(p, ":")[0]
-				peerMap[host] = true
-			}
-			peerMap[*nodeID] = true // Don't delete ourselves
-
 			newConns := []NodeConnection{}
 			for _, nc := range bs.NodeConnections {
-				// If the node is still in our peer list (or it is us), keep it
 				if peerMap[nc.NodeID] {
 					newConns = append(newConns, nc)
 				}
@@ -116,19 +110,15 @@ func handleClearHistory(s *Store) http.HandlerFunc {
 
 func handleCleanupConnections(s *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		currentPeers := s.GetPeers()
+		peerMap := make(map[string]bool)
+		for _, p := range currentPeers {
+			host := strings.Split(p, ":")[0]
+			peerMap[host] = true
+		}
+		peerMap[*nodeID] = true
+
 		s.SilentEdit(func(bs *BoardState) {
-			s.mu.RLock()
-			currentPeers := make([]string, len(s.peers))
-			copy(currentPeers, s.peers)
-			s.mu.RUnlock()
-
-			peerMap := make(map[string]bool)
-			for _, p := range currentPeers {
-				host := strings.Split(p, ":")[0]
-				peerMap[host] = true
-			}
-			peerMap[*nodeID] = true
-
 			newConns := []NodeConnection{}
 			for _, nc := range bs.NodeConnections {
 				if peerMap[nc.NodeID] {
