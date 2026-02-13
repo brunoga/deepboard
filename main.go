@@ -333,6 +333,7 @@ func handleWS(s *Store) http.HandlerFunc {
 
 		go func() {
 			for range sub {
+				log.Printf("Refresh triggered for client %s", connID)
 				conn.WriteJSON(WSMessage{Type: "refresh"})
 			}
 		}()
@@ -342,6 +343,7 @@ func handleWS(s *Store) http.HandlerFunc {
 			if err := conn.ReadJSON(&msg); err != nil {
 				break
 			}
+			log.Printf("WS message from %s: type=%s", connID, msg.Type)
 
 			switch msg.Type {
 			case "move":
@@ -386,28 +388,29 @@ func handleCursorInternal(s *Store, op *Cursor) {
 
 func handleMoveInternal(s *Store, op *MoveOp) {
 	log.Printf("Processing move: Card %s from %s to %s (index %d)", op.CardID, op.FromCol, op.ToCol, op.ToIndex)
-	s.Edit(func(bs *BoardState) {
-		var card Card
-		var found bool
-		var fromColIdx, fromCardIdx int = -1, -1
 
+	var card Card
+	var found bool
+
+	// 1. Remove from source
+	s.Edit(func(bs *BoardState) {
 		for ci, col := range bs.Board.Columns {
 			if col.ID == op.FromCol {
-				fromColIdx = ci
 				for i, c := range col.Cards {
 					if c.ID == op.CardID {
-						card, fromCardIdx, found = c, i, true
-						break
+						card, found = c, true
+						bs.Board.Columns[ci].Cards = append(col.Cards[:i], col.Cards[i+1:]...)
+						log.Printf("Removed card %s from column %s", op.CardID, op.FromCol)
+						return
 					}
 				}
 			}
 		}
+	})
 
-		if found {
-			bs.Board.Columns[fromColIdx].Cards = append(
-				bs.Board.Columns[fromColIdx].Cards[:fromCardIdx],
-				bs.Board.Columns[fromColIdx].Cards[fromCardIdx+1:]...,
-			)
+	// 2. Add to destination
+	if found {
+		s.Edit(func(bs *BoardState) {
 			for i, col := range bs.Board.Columns {
 				if col.ID == op.ToCol {
 					idx := op.ToIndex
@@ -419,11 +422,12 @@ func handleMoveInternal(s *Store, op *MoveOp) {
 					newCards = append(newCards, card)
 					newCards = append(newCards, col.Cards[idx:]...)
 					bs.Board.Columns[i].Cards = newCards
+					log.Printf("Inserted card %s into column %s at index %d", op.CardID, op.ToCol, idx)
 					break
 				}
 			}
-		}
-	})
+		})
+	}
 }
 
 func handleTextOpInternal(s *Store, op *TextOp) {
@@ -465,8 +469,10 @@ func handleAdd(store *Store) http.HandlerFunc {
 			title = "New Task"
 		}
 		store.Edit(func(bs *BoardState) {
+			id := uuid.New().String()
+			log.Printf("Adding card: %s (Title: %s)", id, title)
 			bs.Board.Columns[0].Cards = append(bs.Board.Columns[0].Cards, Card{
-				ID: uuid.New().String(), Title: title,
+				ID: id, Title: title,
 			})
 		})
 		http.Redirect(w, r, "/", http.StatusSeeOther)

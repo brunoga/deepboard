@@ -192,6 +192,7 @@ func (s *Store) saveState() {
 func (s *Store) savePatch(delta crdt.Delta[BoardState]) {
 	patchData, _ := json.Marshal(delta)
 	summary := delta.Patch.Summary()
+	log.Printf("Saving patch: %s", summary)
 	s.db.Exec("INSERT INTO patches (timestamp, patch, summary) VALUES (?, ?, ?)",
 		delta.Timestamp.String(), patchData, summary)
 }
