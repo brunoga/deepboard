@@ -302,7 +302,7 @@ func handleWS(s *Store) http.HandlerFunc {
 }
 
 func handleCursorInternal(s *Store, op *Cursor) {
-	s.Edit(func(bs *BoardState) {
+	s.SilentEdit(func(bs *BoardState) {
 		found := false
 		for i, c := range bs.Cursors {
 			if c.ID == op.ID {
@@ -544,15 +544,55 @@ const indexHTML = `
 
             // Update Board
             fetch('/board').then(r => r.text()).then(html => {
-                document.getElementById('board').innerHTML = html;
-                if (activeId) {
-                    const el = document.getElementById(activeId);
-                    if (el) {
-                        el.focus();
-                        el.setSelectionRange(cursor, cursor);
-                        el.dataset.lastValue = el.value;
+                const temp = document.createElement('div');
+                temp.innerHTML = html;
+                
+                // Update columns but preserve active textarea
+                document.querySelectorAll('.column').forEach((col, i) => {
+                    const newCol = temp.querySelectorAll('.column')[i];
+                    if (!newCol) return;
+
+                    // Update presence lists regardless
+                    col.querySelectorAll('.presence-list').forEach((pl, j) => {
+                        const newPl = newCol.querySelectorAll('.presence-list')[j];
+                        if (newPl) pl.innerHTML = newPl.innerHTML;
+                    });
+
+                    // Update card lists but be careful with textareas
+                    const list = col.querySelector('.card-list');
+                    const newList = newCol.querySelector('.card-list');
+                    
+                    if (activeId && list.querySelector('#' + activeId)) {
+                        // If this column contains the active textarea, we update only the non-active parts
+                        newList.querySelectorAll('.card').forEach(newCard => {
+                            const cardId = newCard.dataset.id;
+                            const oldCard = list.querySelector('[data-id="' + cardId + '"]');
+                            if (!oldCard) {
+                                list.appendChild(newCard);
+                            } else {
+                                // Update title
+                                oldCard.querySelector('.card-title').innerText = newCard.querySelector('.card-title').innerText;
+                                // Update textarea ONLY if it's not the active one
+                                const oldTA = oldCard.querySelector('.card-desc');
+                                const newTA = newCard.querySelector('.card-desc');
+                                if (oldTA.id !== activeId) {
+                                    oldTA.value = newTA.value;
+                                    oldTA.dataset.lastValue = newTA.value;
+                                }
+                            }
+                        });
+                        // Remove deleted cards
+                        list.querySelectorAll('.card').forEach(oldCard => {
+                            if (!newList.querySelector('[data-id="' + oldCard.dataset.id + '"]')) {
+                                oldCard.remove();
+                            }
+                        });
+                    } else {
+                        // No active textarea here, safe to replace content
+                        list.innerHTML = newList.innerHTML;
                     }
-                }
+                });
+
                 initSortable(); initTextareas();
             });
         }
@@ -580,21 +620,30 @@ const indexHTML = `
 
         function initTextareas() {
             document.querySelectorAll('.card-desc').forEach(el => {
-                let timeout;
+                let inputTimeout;
+                let cursorTimeout;
+                
                 const sendCursor = () => {
-                    socket.send(JSON.stringify({
-                        type: 'cursor',
-                        cursor: { cardId: el.id.slice(5), pos: el.selectionStart }
-                    }));
+                    if (cursorTimeout) return;
+                    cursorTimeout = setTimeout(() => {
+                        socket.send(JSON.stringify({
+                            type: 'cursor',
+                            cursor: { cardId: el.id.slice(5), pos: el.selectionStart }
+                        }));
+                        cursorTimeout = null;
+                    }, 200); // Throttle cursors to 5fps
                 };
+
                 el.onfocus = sendCursor;
                 el.onclick = sendCursor;
-                el.onkeyup = sendCursor;
+                el.onkeyup = (e) => {
+                    sendCursor();
+                };
 
                 el.oninput = () => {
                     sendCursor();
-                    clearTimeout(timeout);
-                    timeout = setTimeout(() => {
+                    clearTimeout(inputTimeout);
+                    inputTimeout = setTimeout(() => {
                         const old = el.dataset.lastValue || "", val = el.value;
                         let s = 0; while(s < old.length && s < val.length && old[s] === val[s]) s++;
                         let oe = old.length-1, ne = val.length-1;
@@ -602,7 +651,7 @@ const indexHTML = `
                         if (oe >= s) socket.send(JSON.stringify({type:'textOp', textOp:{cardId:el.id.slice(5), op:'delete', pos:s, length:oe-s+1}}));
                         if (ne >= s) socket.send(JSON.stringify({type:'textOp', textOp:{cardId:el.id.slice(5), op:'insert', pos:s, val:val.substring(s, ne+1)}}));
                         el.dataset.lastValue = val;
-                    }, 100);
+                    }, 250); // Increased from 100ms to 250ms
                 };
             });
         }

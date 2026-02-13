@@ -107,6 +107,17 @@ func (s *Store) Edit(fn func(*BoardState)) crdt.Delta[BoardState] {
 	return delta
 }
 
+func (s *Store) SilentEdit(fn func(*BoardState)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delta := s.crdt.Edit(fn)
+	if delta.Patch != nil {
+		s.saveState()
+		// We don't save patches or broadcast for silent edits
+	}
+}
+
 func (s *Store) syncToPeers(delta crdt.Delta[BoardState]) {
 	data, err := json.Marshal(delta)
 	if err != nil {
@@ -202,7 +213,7 @@ func (s *Store) Unsubscribe(ch chan []byte) {
 }
 
 func (s *Store) updateConnections(count int) {
-	s.Edit(func(bs *BoardState) {
+	s.SilentEdit(func(bs *BoardState) {
 		found := false
 		for i, nc := range bs.NodeConnections {
 			if nc.NodeID == s.nodeID {
