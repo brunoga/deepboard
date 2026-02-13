@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/brunoga/deep/v3/crdt"
+	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 )
 
@@ -291,6 +292,103 @@ func (s *Store) removeCursor(id string) {
 			}
 		}
 		bs.Cursors = newCursors
+	})
+}
+
+func (s *Store) SetCursor(cursor Cursor) {
+	s.SilentEdit(func(bs *BoardState) {
+		found := false
+		for i, c := range bs.Cursors {
+			if c.ID == cursor.ID {
+				bs.Cursors[i].CardID = cursor.CardID
+				bs.Cursors[i].Pos = cursor.Pos
+				found = true
+				break
+			}
+		}
+		if !found {
+			bs.Cursors = append(bs.Cursors, cursor)
+		}
+	})
+}
+
+func (s *Store) AddCard(title string) string {
+	id := uuid.New().String()
+	s.Edit(func(bs *BoardState) {
+		bs.Board.Columns[0].Cards = append(bs.Board.Columns[0].Cards, Card{
+			ID: id, Title: title,
+		})
+	})
+	return id
+}
+
+func (s *Store) MoveCard(cardID, fromCol, toCol string, toIndex int) {
+	var card Card
+	var found bool
+
+	// 1. Remove from source
+	s.Edit(func(bs *BoardState) {
+		for ci, col := range bs.Board.Columns {
+			if col.ID == fromCol {
+				for i, c := range col.Cards {
+					if c.ID == cardID {
+						card, found = c, true
+						bs.Board.Columns[ci].Cards = append(col.Cards[:i], col.Cards[i+1:]...)
+						return
+					}
+				}
+			}
+		}
+	})
+
+	// 2. Add to destination
+	if found {
+		s.Edit(func(bs *BoardState) {
+			for i, col := range bs.Board.Columns {
+				if col.ID == toCol {
+					idx := toIndex
+					if idx > len(col.Cards) {
+						idx = len(col.Cards)
+					}
+					newCards := make([]Card, 0, len(col.Cards)+1)
+					newCards = append(newCards, col.Cards[:idx]...)
+					newCards = append(newCards, card)
+					newCards = append(newCards, col.Cards[idx:]...)
+					bs.Board.Columns[i].Cards = newCards
+					break
+				}
+			}
+		})
+	}
+}
+
+func (s *Store) UpdateCardText(cardID, op, val string, pos, length int) {
+	s.Edit(func(bs *BoardState) {
+		for ci, col := range bs.Board.Columns {
+			for ri, card := range col.Cards {
+				if card.ID == cardID {
+					if op == "insert" {
+						bs.Board.Columns[ci].Cards[ri].Description = card.Description.Insert(pos, val, s.crdt.Clock)
+					} else if op == "delete" {
+						bs.Board.Columns[ci].Cards[ri].Description = card.Description.Delete(pos, length)
+					}
+					return
+				}
+			}
+		}
+	})
+}
+
+func (s *Store) DeleteCard(cardID string) {
+	s.Edit(func(bs *BoardState) {
+		for ci, col := range bs.Board.Columns {
+			for ri, card := range col.Cards {
+				if card.ID == cardID {
+					bs.Board.Columns[ci].Cards = append(col.Cards[:ri], col.Cards[ri+1:]...)
+					return
+				}
+			}
+		}
 	})
 }
 

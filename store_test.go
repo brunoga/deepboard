@@ -204,3 +204,56 @@ func TestStore_ConnectionTracking(t *testing.T) {
 		}
 	}
 }
+
+func TestStore_CardOperations(t *testing.T) {
+	s, cleanup := setupTestStore(t, "ops", "node-1")
+	defer cleanup()
+
+	// 1. Add Card
+	cardID := s.AddCard("Operation Task")
+	board := s.GetBoard()
+	if len(board.Board.Columns[0].Cards) != 2 { // 1 initial + 1 new
+		t.Errorf("expected 2 cards in TODO, got %d", len(board.Board.Columns[0].Cards))
+	}
+
+	// 2. Move Card (TODO -> In Progress)
+	s.MoveCard(cardID, "todo", "in-progress", 0)
+	board = s.GetBoard()
+	if len(board.Board.Columns[0].Cards) != 1 {
+		t.Errorf("expected 1 card in TODO after move, got %d", len(board.Board.Columns[0].Cards))
+	}
+	if len(board.Board.Columns[1].Cards) != 1 {
+		t.Errorf("expected 1 card in In Progress, got %d", len(board.Board.Columns[1].Cards))
+	}
+	if board.Board.Columns[1].Cards[0].ID != cardID {
+		t.Errorf("wrong card moved to In Progress")
+	}
+
+	// 3. Update Text
+	s.UpdateCardText(cardID, "insert", "Detailed description", 0, 0)
+	board = s.GetBoard()
+	desc := board.Board.Columns[1].Cards[0].Description.String()
+	if desc != "Detailed description" {
+		t.Errorf("expected description 'Detailed description', got '%s'", desc)
+	}
+
+	// 4. Delete Card
+	s.DeleteCard(cardID)
+	board = s.GetBoard()
+	if len(board.Board.Columns[1].Cards) != 0 {
+		t.Errorf("expected 0 cards in In Progress after delete, got %d", len(board.Board.Columns[1].Cards))
+	}
+}
+
+func TestStore_Reset(t *testing.T) {
+	s, cleanup := setupTestStore(t, "reset", "node-1")
+	defer cleanup()
+
+	s.AddCard("To be deleted")
+	s.Reset()
+
+	board := s.GetBoard()
+	if len(board.Board.Columns[0].Cards) != 1 { // Should only have the 1 initial sample card
+		t.Errorf("expected only 1 initial card after reset, got %d", len(board.Board.Columns[0].Cards))
+	}
+}
