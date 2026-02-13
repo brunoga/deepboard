@@ -199,6 +199,22 @@ func (s *Store) ClearHistory() {
 	s.Broadcast(WSMessage{Type: "refresh"})
 }
 
+func (s *Store) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Clear DB
+	s.db.Exec("DELETE FROM state")
+	s.db.Exec("DELETE FROM patches")
+
+	// Re-initialize CRDT
+	s.crdt = crdt.NewCRDT(NewInitialBoard(), s.nodeID)
+	s.saveState()
+
+	// Notify everyone
+	s.Broadcast(WSMessage{Type: "refresh"})
+}
+
 func (s *Store) saveState() {
 	data, _ := json.Marshal(s.crdt)
 	s.db.Exec("INSERT OR REPLACE INTO state (id, data) VALUES ('latest', ?)", data)

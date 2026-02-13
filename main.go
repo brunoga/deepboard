@@ -68,6 +68,7 @@ func main() {
 	http.HandleFunc("/api/state", handleState(store))
 	http.HandleFunc("/api/history/clear", handleClearHistory(store))
 	http.HandleFunc("/api/connections/cleanup", handleCleanupConnections(store))
+	http.HandleFunc("/api/admin/reset", handleReset(store))
 
 	fmt.Printf("DeepBoard starting on http://localhost%s (Node ID: %s)\n", *addr, *nodeID)
 	if len(peerList) > 0 {
@@ -127,6 +128,14 @@ func handleCleanupConnections(s *Store) http.HandlerFunc {
 			}
 			bs.NodeConnections = newConns
 		})
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func handleReset(s *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("ADMIN: Resetting board to initial state")
+		s.Reset()
 		w.WriteHeader(http.StatusOK)
 	}
 }
@@ -526,6 +535,10 @@ const indexHTML = `
         .sidebar-header h3 { background: none !important; box-shadow: none !important; margin: 0; }
         .clear-btn { background: #e74c3c; color: white; border: none; border-radius: 4px; padding: 4px 8px; font-size: 0.7rem; cursor: pointer; transition: background 0.2s; }
         .clear-btn:hover { background: #c0392b; }
+
+        .reset-btn { background: #ff0000; color: white; border: 4px solid #8b0000; border-radius: 8px; padding: 10px 20px; font-size: 1.2rem; font-weight: bold; cursor: pointer; text-transform: uppercase; box-shadow: 0 4px 0 #8b0000; transition: all 0.1s; margin-left: 20px; }
+        .reset-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 #8b0000; }
+        .reset-btn:hover { background: #ff3333; }
     </style>
 </head>
 <body>
@@ -535,6 +548,7 @@ const indexHTML = `
             Local: {{.LocalCount}} | Total: {{.TotalCount}}
             <span onclick="cleanupConnections()" style="cursor: pointer; margin-left: 10px; text-decoration: underline;" title="Force cleanup of stale nodes">🧹</span>
         </div>
+        <button onclick="resetBoard()" class="reset-btn">Reset Board</button>
         <div class="add-card-form">
             <form action="/api/add" method="POST" style="display: flex; gap: 8px;">
                 <input type="text" name="title" placeholder="What needs to be done?" required>
@@ -656,6 +670,12 @@ const indexHTML = `
 
         function cleanupConnections() {
             fetch('/api/connections/cleanup').then(() => refreshUI());
+        }
+
+        function resetBoard() {
+            if (confirm('DANGER: This will wipe EVERYTHING and reset the board for all users. Are you absolutely sure?')) {
+                fetch('/api/admin/reset').then(() => refreshUI());
+            }
         }
 
         function initSortable() {
