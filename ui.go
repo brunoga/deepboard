@@ -123,15 +123,27 @@ const indexHTML = `
 
     <script>
         let socket;
+        let heartbeatInterval;
+
         function connect() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             socket = new WebSocket(protocol + '//' + window.location.host + '/ws');
-            socket.onopen = () => refreshUI();
+            socket.onopen = () => {
+                refreshUI();
+                heartbeatInterval = setInterval(() => {
+                    if (socket.readyState === WebSocket.OPEN) {
+                        socket.send(JSON.stringify({type: 'heartbeat'}));
+                    }
+                }, 10000);
+            };
             socket.onmessage = (e) => {
                 const msg = JSON.parse(e.data);
                 if (msg.type === 'refresh' && !msg.silent) refreshUI();
             };
-            socket.onclose = () => setTimeout(connect, 1000);
+            socket.onclose = () => {
+                clearInterval(heartbeatInterval);
+                setTimeout(connect, 1000);
+            };
         }
 
         const lastInputTime = {};

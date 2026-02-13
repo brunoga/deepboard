@@ -427,6 +427,8 @@ func handleWS(s *Store) http.HandlerFunc {
 					msg.Cursor.NodeID = *nodeID
 					s.SetCursor(*msg.Cursor)
 				}
+			case "heartbeat":
+				s.Heartbeat(sub)
 			}
 		}
 		close(done)

@@ -20,7 +20,7 @@ type Store struct {
 	mu     sync.RWMutex
 	db     *sql.DB
 	crdt   *crdt.CRDT[BoardState]
-	subs   map[chan WSMessage]bool
+	subs   map[chan WSMessage]time.Time
 	peers  []string
 	nodeID string
 	lastCount int
@@ -50,7 +50,7 @@ func NewStore(dbPath string, nodeID string, peers []string) (*Store, error) {
 
 	s := &Store{
 		db:        db,
-		subs:      make(map[chan WSMessage]bool),
+		subs:      make(map[chan WSMessage]time.Time),
 		peers:     peers,
 		nodeID:    nodeID,
 		lastCount: -1,
@@ -71,17 +71,31 @@ func NewStore(dbPath string, nodeID string, peers []string) (*Store, error) {
 		}
 	}
 
+	s.mu.Lock()
+	s.updateConnectionsLocked(0)
+	s.mu.Unlock()
+
 	go s.connectionManager()
 
 	return s, nil
 }
 
 func (s *Store) connectionManager() {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(5 * time.Second)
 	for range ticker.C {
 		s.mu.Lock()
+		now := time.Now()
+		changed := false
+		for ch, lastSeen := range s.subs {
+			if now.Sub(lastSeen) > 30*time.Second {
+				delete(s.subs, ch)
+				close(ch)
+				changed = true
+			}
+		}
+		
 		count := len(s.subs)
-		if count != s.lastCount {
+		if count != s.lastCount || changed {
 			s.lastCount = count
 			s.updateConnectionsLocked(count)
 		}
@@ -260,7 +274,10 @@ func (s *Store) Subscribe() chan WSMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.subs[ch] = true
+	s.subs[ch] = time.Now()
+	count := len(s.subs)
+	s.lastCount = count
+	s.updateConnectionsLocked(count)
 	return ch
 }
 
@@ -273,6 +290,18 @@ func (s *Store) Unsubscribe(ch chan WSMessage) {
 	}
 	delete(s.subs, ch)
 	close(ch)
+	
+	count := len(s.subs)
+	s.lastCount = count
+	s.updateConnectionsLocked(count)
+}
+
+func (s *Store) Heartbeat(ch chan WSMessage) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.subs[ch]; ok {
+		s.subs[ch] = time.Now()
+	}
 }
 
 func (s *Store) UpdateConnections(count int) {
