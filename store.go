@@ -77,7 +77,7 @@ func (s *Store) ApplyDelta(delta crdt.Delta[BoardState]) error {
 	if s.crdt.ApplyDelta(delta) {
 		s.saveState()
 		s.savePatch(delta)
-		s.broadcast(delta)
+		s.broadcast(&delta)
 	}
 	return nil
 }
@@ -90,7 +90,7 @@ func (s *Store) Edit(fn func(*BoardState)) crdt.Delta[BoardState] {
 	if delta.Patch != nil {
 		s.saveState()
 		s.savePatch(delta)
-		s.broadcast(delta)
+		s.broadcast(&delta)
 		go s.syncToPeers(delta)
 	}
 	return delta
@@ -112,6 +112,18 @@ func (s *Store) syncToPeers(delta crdt.Delta[BoardState]) {
 			resp.Body.Close()
 		}(peer)
 	}
+}
+
+func (s *Store) Merge(other *crdt.CRDT[BoardState]) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.crdt.Merge(other) {
+		s.saveState()
+		s.broadcast(nil) // Trigger refresh
+		return true
+	}
+	return false
 }
 
 func (s *Store) GetHistory(limit int) []string {
@@ -161,8 +173,13 @@ func (s *Store) Unsubscribe(ch chan []byte) {
 	close(ch)
 }
 
-func (s *Store) broadcast(delta crdt.Delta[BoardState]) {
-	data, _ := json.Marshal(delta)
+func (s *Store) broadcast(delta *crdt.Delta[BoardState]) {
+	var data []byte
+	if delta != nil {
+		data, _ = json.Marshal(delta)
+	} else {
+		data, _ = json.Marshal(map[string]string{"type": "refresh"})
+	}
 	for ch := range s.subs {
 		select {
 		case ch <- data:

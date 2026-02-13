@@ -56,10 +56,9 @@ This project uses a simple "Push" gossip model:
 - The receiving node applies the Delta to its local CRDT state.
 
 ### What if a node is offline?
-Since this is a sample toy project:
-1. **Missed Updates:** If a node is offline when a Delta is broadcast, it will currently miss that update.
-2. **Eventual Consistency:** In a full implementation, nodes would perform a "Sync Handshake" on startup, exchanging missing patches to catch up to the latest state. The `deep` library supports this, but it is not implemented in this basic demo.
-3. **Conflict Resolution:** Even with missed updates, the CRDT ensures that once nodes *do* receive the same set of updates (even out of order), they will converge to the exact same state.
+1. **State Sync on Connect:** When a node starts, it immediately attempts to fetch the full CRDT state from all known `-peers` and merges it locally.
+2. **Background Sync:** The node runs a background loop (every 30 seconds) that re-syncs state from peers. This ensures that even if a node was offline during a broadcast, it will eventually catch up.
+3. **Conflict Resolution:** The `deep` library uses LWW (Last-Write-Wins) and state-based merging to ensure that once nodes share data, they converge to the exact same state regardless of update order.
 
 ## License
 

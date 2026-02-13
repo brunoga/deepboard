@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/brunoga/deep/v3/crdt"
 	"github.com/google/uuid"
@@ -44,12 +45,53 @@ func main() {
 	http.HandleFunc("/history", handleHistory(store))
 	http.HandleFunc("/api/add", handleAdd(store))
 	http.HandleFunc("/api/sync", handleSync(store))
+	http.HandleFunc("/api/state", handleState(store))
 
 	fmt.Printf("DeepBoard starting on http://localhost%s (Node ID: %s)\n", *addr, nodeID)
 	if len(peerList) > 0 {
 		fmt.Printf("Peers: %v\n", peerList)
+		go startBackgroundSync(store)
 	}
 	log.Fatal(http.ListenAndServe(*addr, nil))
+}
+
+func handleState(s *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		json.NewEncoder(w).Encode(s.crdt)
+	}
+}
+
+func startBackgroundSync(s *Store) {
+	// Immediate sync on startup
+	for _, peer := range s.peers {
+		syncWithPeer(s, peer)
+	}
+
+	// Periodic sync every 30 seconds
+	ticker := time.NewTicker(30 * time.Second)
+	for range ticker.C {
+		for _, peer := range s.peers {
+			syncWithPeer(s, peer)
+		}
+	}
+}
+
+func syncWithPeer(s *Store, peer string) {
+	url := fmt.Sprintf("http://%s/api/state", peer)
+	resp, err := http.Get(url)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	var remoteCRDT crdt.CRDT[BoardState]
+	if err := json.NewDecoder(resp.Body).Decode(&remoteCRDT); err != nil {
+		return
+	}
+
+	s.Merge(&remoteCRDT)
 }
 
 func handleSync(s *Store) http.HandlerFunc {
@@ -57,6 +99,12 @@ func handleSync(s *Store) http.HandlerFunc {
 		var delta crdt.Delta[BoardState]
 		if err := json.NewDecoder(r.Body).Decode(&delta); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if delta.Patch == nil {
+			// Triggered broadcast from Merge
+			s.broadcast(nil)
+			w.WriteHeader(http.StatusOK)
 			return
 		}
 		if err := s.ApplyDelta(delta); err != nil {
