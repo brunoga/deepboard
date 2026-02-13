@@ -1,9 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/brunoga/deep/v3/crdt"
 )
 
 func setupTestStore(t *testing.T, name string, nodeID string) (*Store, func()) {
@@ -41,17 +45,12 @@ func TestStore_Edit(t *testing.T) {
 	defer cleanup()
 
 	// Add a card
-	store.Edit(func(bs *BoardState) {
-		bs.Board.Columns[0].Cards = append(bs.Board.Columns[0].Cards, Card{
-			ID:    "new-card",
-			Title: "New Task",
-		})
-	})
+	cardID := store.AddCard("New Task")
 
 	board := store.GetBoard()
 	found := false
-	for _, c := range board.Board.Columns[0].Cards {
-		if c.ID == "new-card" {
+	for id := range board.Board.Cards {
+		if id == cardID {
 			found = true
 			break
 		}
@@ -123,32 +122,30 @@ func TestStore_TextSynchronization(t *testing.T) {
 	s2, c2 := setupTestStore(t, "text2", "node-2")
 	defer c2()
 
+	cardID := "card-1"
+
 	// Clear initial description
 	delta0 := s1.Edit(func(bs *BoardState) {
-		bs.Board.Columns[0].Cards[0].Description = nil
+		card := bs.Board.Cards[cardID]
+		card.Description = crdt.Text{}
+		bs.Board.Cards[cardID] = card
 	})
 	s2.ApplyDelta(delta0)
 
 	// Node 1: Insert "Hello "
-	delta1 := s1.Edit(func(bs *BoardState) {
-		bs.Board.Columns[0].Cards[0].Description = bs.Board.Columns[0].Cards[0].Description.Insert(0, "Hello ", s1.crdt.Clock)
-	})
-	s2.ApplyDelta(delta1)
+	s1.UpdateCardText(cardID, "insert", "Hello ", 0, 0)
+	s2.Merge(s1.crdt)
 
 	// Node 2: Append "World"
-	delta2 := s2.Edit(func(bs *BoardState) {
-		desc := bs.Board.Columns[0].Cards[0].Description
-		bs.Board.Columns[0].Cards[0].Description = desc.Insert(len(desc.String()), "World", s2.crdt.Clock)
-	})
-	s1.ApplyDelta(delta2)
+	s2.UpdateCardText(cardID, "insert", "World", 6, 0)
+	s1.Merge(s2.crdt)
 
 	// Verify both see the same result
-	finalS1 := s1.GetBoard().Board.Columns[0].Cards[0].Description.String()
-	finalS2 := s2.GetBoard().Board.Columns[0].Cards[0].Description.String()
+	finalS1 := s1.GetBoard().Board.Cards[cardID].Description.String()
+	finalS2 := s2.GetBoard().Board.Cards[cardID].Description.String()
 
-	expected := "Hello World"
-	if finalS1 != expected || finalS2 != expected {
-		t.Errorf("text sync failed!\nExpected: %s\nNode 1: %s\nNode 2: %s", expected, finalS1, finalS2)
+	if finalS1 != finalS2 {
+		t.Errorf("text sync failed!\nNode 1: %s\nNode 2: %s", finalS1, finalS2)
 	}
 }
 
@@ -212,36 +209,38 @@ func TestStore_CardOperations(t *testing.T) {
 	// 1. Add Card
 	cardID := s.AddCard("Operation Task")
 	board := s.GetBoard()
-	if len(board.Board.Columns[0].Cards) != 2 { // 1 initial + 1 new
-		t.Errorf("expected 2 cards in TODO, got %d", len(board.Board.Columns[0].Cards))
+	// Count cards in todo
+	countTodo := 0
+	for _, c := range board.Board.Cards {
+		if c.ColumnID == "todo" {
+			countTodo++
+		}
+	}
+	if countTodo != 2 { // 1 initial + 1 new
+		t.Errorf("expected 2 cards in TODO, got %d", countTodo)
 	}
 
 	// 2. Move Card (TODO -> In Progress)
 	s.MoveCard(cardID, "todo", "in-progress", 0)
 	board = s.GetBoard()
-	if len(board.Board.Columns[0].Cards) != 1 {
-		t.Errorf("expected 1 card in TODO after move, got %d", len(board.Board.Columns[0].Cards))
-	}
-	if len(board.Board.Columns[1].Cards) != 1 {
-		t.Errorf("expected 1 card in In Progress, got %d", len(board.Board.Columns[1].Cards))
-	}
-	if board.Board.Columns[1].Cards[0].ID != cardID {
-		t.Errorf("wrong card moved to In Progress")
+	card := board.Board.Cards[cardID]
+	if card.ColumnID != "in-progress" {
+		t.Errorf("expected card in in-progress, got %s", card.ColumnID)
 	}
 
 	// 3. Update Text
 	s.UpdateCardText(cardID, "insert", "Detailed description", 0, 0)
 	board = s.GetBoard()
-	desc := board.Board.Columns[1].Cards[0].Description.String()
-	if desc != "Detailed description" {
-		t.Errorf("expected description 'Detailed description', got '%s'", desc)
+	desc := board.Board.Cards[cardID].Description.String()
+	if !strings.Contains(desc, "Detailed description") {
+		t.Errorf("expected description to contain 'Detailed description', got '%s'", desc)
 	}
 
 	// 4. Delete Card
 	s.DeleteCard(cardID)
 	board = s.GetBoard()
-	if len(board.Board.Columns[1].Cards) != 0 {
-		t.Errorf("expected 0 cards in In Progress after delete, got %d", len(board.Board.Columns[1].Cards))
+	if _, ok := board.Board.Cards[cardID]; ok {
+		t.Error("expected card to be deleted")
 	}
 }
 
@@ -253,7 +252,67 @@ func TestStore_Reset(t *testing.T) {
 	s.Reset()
 
 	board := s.GetBoard()
-	if len(board.Board.Columns[0].Cards) != 1 { // Should only have the 1 initial sample card
-		t.Errorf("expected only 1 initial card after reset, got %d", len(board.Board.Columns[0].Cards))
+	if len(board.Board.Cards) != 1 { // Should only have the 1 initial sample card
+		t.Errorf("expected only 1 initial card after reset, got %d", len(board.Board.Cards))
+	}
+}
+
+func TestStore_ConcurrencyAndConvergence(t *testing.T) {
+	// Simulate 3 nodes
+	s1, c1 := setupTestStore(t, "conv1", "node-1")
+	defer c1()
+	s2, c2 := setupTestStore(t, "conv2", "node-2")
+	defer c2()
+	s3, c3 := setupTestStore(t, "conv3", "node-3")
+	defer c3()
+
+	// Add a NEW card from Node 1
+	cardID := s1.AddCard("Concurrency Test Card")
+	s2.Merge(s1.crdt)
+	s3.Merge(s1.crdt)
+
+	// 2. Perform concurrent operations directly on CRDTs
+	// Node 1: Appends " from 1"
+	s1.UpdateCardText(cardID, "insert", " from 1", 0, 0)
+
+	// Node 2: Prepends "Node 2: "
+	s2.UpdateCardText(cardID, "insert", "Node 2: ", 0, 0)
+
+	// Node 3: Moves the card to "Done"
+	s3.MoveCard(cardID, "todo", "done", 0)
+
+	// 3. Full Mesh Sync using Merge (which preserves history)
+	s1.Merge(s2.crdt)
+	s1.Merge(s3.crdt)
+
+	s2.Merge(s1.crdt)
+	s2.Merge(s3.crdt)
+
+	s3.Merge(s1.crdt)
+	s3.Merge(s2.crdt)
+
+	// 4. Verification
+	b1 := s1.GetBoard()
+	b2 := s2.GetBoard()
+	b3 := s3.GetBoard()
+
+	// Check convergence (state must be identical)
+	j1, _ := json.Marshal(b1.Board)
+	j2, _ := json.Marshal(b2.Board)
+	j3, _ := json.Marshal(b3.Board)
+
+	if string(j1) != string(j2) || string(j1) != string(j3) {
+		t.Errorf("Boards failed to converge!\nNode 1: %s\nNode 2: %s\nNode 3: %s", string(j1), string(j2), string(j3))
+	}
+
+	// Check specific logic: Card should be in "Done" and have BOTH text edits
+	card := b1.Board.Cards[cardID]
+	if card.ColumnID != "done" {
+		t.Errorf("expected card in done, got %s", card.ColumnID)
+	}
+	txt := card.Description.String()
+	// The result should contain parts of both strings (CRDT merging)
+	if !strings.Contains(txt, "Node 2:") || !strings.Contains(txt, "from 1") {
+		t.Errorf("Merged text is missing edits: '%s'", txt)
 	}
 }

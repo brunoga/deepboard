@@ -222,24 +222,7 @@ func handleIndex(s *Store) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		state := s.GetBoard()
-		localCount, totalCount := getConnectionCounts(state)
-		data := struct {
-			NodeID     string
-			Board      Board
-			History    []string
-			LocalCount int
-			TotalCount int
-			Cursors    []Cursor
-		}{
-			NodeID:     *nodeID,
-			Board:      state.Board,
-			History:    s.GetHistory(15),
-			LocalCount: localCount,
-			TotalCount: totalCount,
-			Cursors:    state.Cursors,
-		}
-		tmpl.Execute(w, data)
+		tmpl.Execute(w, prepareUIData(s))
 	}
 }
 
@@ -270,7 +253,7 @@ func handleBoard(s *Store) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		tmpl.Execute(w, s.GetBoard())
+		tmpl.Execute(w, prepareUIData(s))
 	}
 }
 
@@ -279,6 +262,68 @@ func handleHistory(s *Store) http.HandlerFunc {
 		history := s.GetHistory(15)
 		for _, h := range history {
 			fmt.Fprintf(w, "<div class=\"history-entry\">%s</div>", h)
+		}
+	}
+}
+
+type UIColumn struct {
+	ID    string
+	Title string
+	Cards []Card
+}
+
+type UIData struct {
+	NodeID     string
+	Columns    []UIColumn
+	History    []string
+	LocalCount int
+	TotalCount int
+	Cursors    []Cursor
+}
+
+func prepareUIData(s *Store) UIData {
+	state := s.GetBoard()
+	localCount, totalCount := getConnectionCounts(state)
+
+	uiColumns := make([]UIColumn, len(state.Board.Columns))
+	colMap := make(map[string]int)
+
+	for i, col := range state.Board.Columns {
+		uiColumns[i] = UIColumn{
+			ID:    col.ID,
+			Title: col.Title,
+			Cards: []Card{},
+		}
+		colMap[col.ID] = i
+	}
+
+	for _, card := range state.Board.Cards {
+		if idx, ok := colMap[card.ColumnID]; ok {
+			uiColumns[idx].Cards = append(uiColumns[idx].Cards, card)
+		}
+	}
+
+	// Sort cards in each column by Order
+	for i := range uiColumns {
+		sortCards(uiColumns[i].Cards)
+	}
+
+	return UIData{
+		NodeID:     *nodeID,
+		Columns:    uiColumns,
+		History:    s.GetHistory(15),
+		LocalCount: localCount,
+		TotalCount: totalCount,
+		Cursors:    state.Cursors,
+	}
+}
+
+func sortCards(cards []Card) {
+	for i := 0; i < len(cards); i++ {
+		for j := i + 1; j < len(cards); j++ {
+			if cards[i].Order > cards[j].Order {
+				cards[i], cards[j] = cards[j], cards[i]
+			}
 		}
 	}
 }

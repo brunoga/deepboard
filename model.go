@@ -10,6 +10,8 @@ type Card struct {
 	Title       string    `json:"title"`
 	Description crdt.Text `json:"description"`
 	Assignee    string    `json:"assignee"`
+	ColumnID    string    `json:"columnID"`
+	Order       float64   `json:"order"`
 }
 
 type NodeConnection struct {
@@ -27,13 +29,13 @@ type Cursor struct {
 type Column struct {
 	ID    string `deep:"key" json:"id"`
 	Title string `json:"title"`
-	Cards []Card `json:"cards"`
 }
 
 type Board struct {
-	ID      string   `json:"id"`
-	Title   string   `json:"title"`
-	Columns []Column `json:"columns"`
+	ID      string          `json:"id"`
+	Title   string          `json:"title"`
+	Columns []Column        `json:"columns"`
+	Cards   map[string]Card `json:"cards"`
 }
 
 // BoardState is the top-level structure we wrap in a CRDT.
@@ -77,28 +79,19 @@ func NewInitialBoard() BoardState {
 			ID:    "main-board",
 			Title: "DeepBoard Kanban",
 			Columns: []Column{
-				{
-					ID:    "todo",
-					Title: "To Do",
-					Cards: []Card{
-						{
-							ID:    "card-1",
-							Title: "Try Deep Library",
-							Description: crdt.Text{
-								{ID: hlc.HLC{NodeID: "system"}, Value: "Explore the features of the deep library."},
-							},
-						},
+				{ID: "todo", Title: "To Do"},
+				{ID: "in-progress", Title: "In Progress"},
+				{ID: "done", Title: "Done"},
+			},
+			Cards: map[string]Card{
+				"card-1": {
+					ID:       "card-1",
+					Title:    "Try Deep Library",
+					ColumnID: "todo",
+					Order:    1000,
+					Description: crdt.Text{
+						{ID: hlc.HLC{NodeID: "system"}, Value: "Explore the features of the deep library."},
 					},
-				},
-				{
-					ID:    "in-progress",
-					Title: "In Progress",
-					Cards: []Card{},
-				},
-				{
-					ID:    "done",
-					Title: "Done",
-					Cards: []Card{},
 				},
 			},
 		},

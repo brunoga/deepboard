@@ -200,6 +200,18 @@ func (s *Store) ClearHistory() {
 	s.Broadcast(WSMessage{Type: "refresh"})
 }
 
+func (s *Store) GetHistoryAsDelta() crdt.Delta[BoardState] {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var data []byte
+	s.db.QueryRow("SELECT patch FROM patches ORDER BY id DESC LIMIT 1").Scan(&data)
+	
+	var delta crdt.Delta[BoardState]
+	json.Unmarshal(data, &delta)
+	return delta
+}
+
 func (s *Store) Reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -315,81 +327,78 @@ func (s *Store) SetCursor(cursor Cursor) {
 func (s *Store) AddCard(title string) string {
 	id := uuid.New().String()
 	s.Edit(func(bs *BoardState) {
-		bs.Board.Columns[0].Cards = append(bs.Board.Columns[0].Cards, Card{
-			ID: id, Title: title,
-		})
+		if bs.Board.Cards == nil {
+			bs.Board.Cards = make(map[string]Card)
+		}
+		// Find max order in todo
+		maxOrder := 0.0
+		for _, c := range bs.Board.Cards {
+			if c.ColumnID == "todo" && c.Order > maxOrder {
+				maxOrder = c.Order
+			}
+		}
+		bs.Board.Cards[id] = Card{
+			ID:          id,
+			Title:       title,
+			Description: crdt.Text{},
+			ColumnID:    "todo",
+			Order:       maxOrder + 1000,
+		}
 	})
 	return id
 }
 
 func (s *Store) MoveCard(cardID, fromCol, toCol string, toIndex int) {
-	var card Card
-	var found bool
-
-	// 1. Remove from source
 	s.Edit(func(bs *BoardState) {
-		for ci, col := range bs.Board.Columns {
-			if col.ID == fromCol {
-				for i, c := range col.Cards {
-					if c.ID == cardID {
-						card, found = c, true
-						bs.Board.Columns[ci].Cards = append(col.Cards[:i], col.Cards[i+1:]...)
-						return
-					}
-				}
+		card, ok := bs.Board.Cards[cardID]
+		if !ok {
+			return
+		}
+
+		// Calculate new order
+		// Simplified: just put it at the end for now, or between neighbors if we had them.
+		// For a real production app, we'd use Fractional Indexing.
+		maxOrder := 0.0
+		for _, c := range bs.Board.Cards {
+			if c.ColumnID == toCol && c.Order > maxOrder {
+				maxOrder = c.Order
 			}
 		}
-	})
 
-	// 2. Add to destination
-	if found {
-		s.Edit(func(bs *BoardState) {
-			for i, col := range bs.Board.Columns {
-				if col.ID == toCol {
-					idx := toIndex
-					if idx > len(col.Cards) {
-						idx = len(col.Cards)
-					}
-					newCards := make([]Card, 0, len(col.Cards)+1)
-					newCards = append(newCards, col.Cards[:idx]...)
-					newCards = append(newCards, card)
-					newCards = append(newCards, col.Cards[idx:]...)
-					bs.Board.Columns[i].Cards = newCards
-					break
-				}
-			}
-		})
-	}
+		card.ColumnID = toCol
+		card.Order = maxOrder + 1000
+		bs.Board.Cards[cardID] = card
+	})
 }
 
 func (s *Store) UpdateCardText(cardID, op, val string, pos, length int) {
 	s.Edit(func(bs *BoardState) {
-		for ci, col := range bs.Board.Columns {
-			for ri, card := range col.Cards {
-				if card.ID == cardID {
-					if op == "insert" {
-						bs.Board.Columns[ci].Cards[ri].Description = card.Description.Insert(pos, val, s.crdt.Clock)
-					} else if op == "delete" {
-						bs.Board.Columns[ci].Cards[ri].Description = card.Description.Delete(pos, length)
-					}
-					return
-				}
-			}
+		card, ok := bs.Board.Cards[cardID]
+		if !ok {
+			return
 		}
+		if op == "insert" {
+			card.Description = card.Description.Insert(pos, val, s.crdt.Clock)
+		} else if op == "delete" {
+			card.Description = card.Description.Delete(pos, length)
+		}
+		bs.Board.Cards[cardID] = card
 	})
 }
 
 func (s *Store) DeleteCard(cardID string) {
 	s.Edit(func(bs *BoardState) {
-		for ci, col := range bs.Board.Columns {
-			for ri, card := range col.Cards {
-				if card.ID == cardID {
-					bs.Board.Columns[ci].Cards = append(col.Cards[:ri], col.Cards[ri+1:]...)
-					return
-				}
-			}
-		}
+		delete(bs.Board.Cards, cardID)
 	})
+}
+
+func (s *Store) findCardLocked(bs *BoardState, cardID string) (*Card, int, int) {
+	// Deprecated but keeping for compatibility if needed elsewhere
+	card, ok := bs.Board.Cards[cardID]
+	if !ok {
+		return nil, -1, -1
+	}
+	return &card, -1, -1
 }
 
 func (s *Store) Broadcast(msg WSMessage) {

@@ -2,7 +2,7 @@ package main
 
 const boardHTML = `
 {{$cursors := .Cursors}}
-{{range .Board.Columns}}
+{{range .Columns}}
 <div class="column">
     <h3>{{.Title}}</h3>
     <div class="card-list" id="col-{{.ID}}" data-col-id="{{.ID}}">
