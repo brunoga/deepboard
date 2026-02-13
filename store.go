@@ -86,6 +86,7 @@ func (s *Store) ApplyDelta(delta crdt.Delta[BoardState]) error {
 	defer s.mu.Unlock()
 
 	if s.crdt.ApplyDelta(delta) {
+		log.Printf("Applied delta from remote: %s", delta.Patch.Summary())
 		s.saveState()
 		s.savePatch(delta)
 		s.broadcast(&delta)
@@ -148,6 +149,7 @@ func (s *Store) Merge(other *crdt.CRDT[BoardState]) bool {
 	defer s.mu.Unlock()
 
 	if s.crdt.Merge(other) {
+		log.Printf("Merged state from remote")
 		s.saveState()
 		s.broadcast(nil) // Trigger refresh
 		return true
@@ -250,6 +252,14 @@ func (s *Store) broadcast(delta *crdt.Delta[BoardState]) {
 	} else {
 		data, _ = json.Marshal(map[string]string{"type": "refresh"})
 	}
+
+	s.mu.RLock()
+	subCount := len(s.subs)
+	s.mu.RUnlock()
+	if subCount > 0 {
+		log.Printf("Broadcasting refresh to %d subscribers", subCount)
+	}
+
 	for ch := range s.subs {
 		select {
 		case ch <- data:

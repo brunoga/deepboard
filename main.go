@@ -528,61 +528,55 @@ const indexHTML = `
         }
 
         const lastInputTime = {};
+        let refreshTimeout;
 
         function refreshUI() {
-            // Update History
-            fetch('/history').then(r => r.text()).then(html => {
-                document.getElementById('history').innerHTML = html;
-            });
-
-            // Update Stats
-            fetch('/stats').then(r => r.text()).then(text => {
-                document.getElementById('connection-stats').innerHTML = text;
-            });
+            console.log('Refreshing UI...');
+            // Update History & Stats
+            fetch('/history').then(r => r.text()).then(html => document.getElementById('history').innerHTML = html);
+            fetch('/stats').then(r => r.text()).then(text => document.getElementById('connection-stats').innerHTML = text);
             
-            const active = document.activeElement;
-            const activeId = active && active.classList.contains('card-desc') ? active.id : null;
+            const activeId = document.activeElement && document.activeElement.classList.contains('card-desc') ? document.activeElement.id : null;
 
-            // Update Board
             fetch('/board').then(r => r.text()).then(html => {
                 const temp = document.createElement('div');
                 temp.innerHTML = html;
                 
-                document.querySelectorAll('.column').forEach((col, i) => {
-                    const newCol = temp.querySelectorAll('.column')[i];
-                    if (!newCol) return;
+                temp.querySelectorAll('.card-list').forEach(newList => {
+                    const oldList = document.getElementById(newList.id);
+                    if (!oldList) return;
 
-                    col.querySelectorAll('.presence-list').forEach((pl, j) => {
-                        const newPl = newCol.querySelectorAll('.presence-list')[j];
-                        if (newPl) pl.innerHTML = newPl.innerHTML;
-                    });
-
-                    const list = col.querySelector('.card-list');
-                    const newList = newCol.querySelector('.card-list');
-                    
+                    // Update existing cards and add new ones
                     newList.querySelectorAll('.card').forEach(newCard => {
-                        const cardId = newCard.dataset.id;
-                        const oldCard = list.querySelector('[data-id="' + cardId + '"]');
+                        const oldCard = oldList.querySelector('[data-id="' + newCard.dataset.id + '"]');
                         if (!oldCard) {
-                            list.appendChild(newCard);
+                            oldList.appendChild(newCard);
                         } else {
+                            // Update title and presence
                             oldCard.querySelector('.card-title').innerText = newCard.querySelector('.card-title').innerText;
+                            oldCard.querySelector('.presence-list').innerHTML = newCard.querySelector('.presence-list').innerHTML;
+                            
                             const oldTA = oldCard.querySelector('.card-desc');
                             const newTA = newCard.querySelector('.card-desc');
+                            const now = Date.now(), lastTyped = lastInputTime[oldTA.id] || 0;
                             
-                            // Guard: Only update if we haven't typed here recently (within 1 second)
-                            const now = Date.now();
-                            const lastTyped = lastInputTime[oldTA.id] || 0;
-                            if (oldTA.id !== activeId && (now - lastTyped > 1000)) {
-                                oldTA.value = newTA.value;
-                                oldTA.dataset.lastValue = newTA.value;
+                            if (oldTA.id === activeId || (now - lastTyped < 1000)) {
+                                console.log('Ignoring text update for ' + oldTA.id + ' due to active editing');
+                                // Schedule a catch-up refresh
+                                clearTimeout(refreshTimeout);
+                                refreshTimeout = setTimeout(refreshUI, 1100);
+                            } else {
+                                if (oldTA.value !== newTA.value) {
+                                    oldTA.value = newTA.value;
+                                    oldTA.dataset.lastValue = newTA.value;
+                                }
                             }
                         }
                     });
-                    list.querySelectorAll('.card').forEach(oldCard => {
-                        if (!newList.querySelector('[data-id="' + oldCard.dataset.id + '"]')) {
-                            oldCard.remove();
-                        }
+
+                    // Remove cards that are no longer present
+                    oldList.querySelectorAll('.card').forEach(oldCard => {
+                        if (!newList.querySelector('[data-id="' + oldCard.dataset.id + '"]')) oldCard.remove();
                     });
                 });
 
