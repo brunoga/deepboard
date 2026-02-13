@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"html/template"
 	"log"
 	"net/http"
+	"strings"
 
+	"github.com/brunoga/deep/v3/crdt"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -14,6 +17,7 @@ import (
 var (
 	addr   = flag.String("addr", ":8080", "http service address")
 	dbPath = flag.String("db", "deepboard.db", "path to sqlite database")
+	peers  = flag.String("peers", "", "comma-separated list of peer addresses")
 	nodeID = uuid.New().String()
 )
 
@@ -24,7 +28,12 @@ var upgrader = websocket.Upgrader{
 func main() {
 	flag.Parse()
 
-	store, err := NewStore(*dbPath, nodeID)
+	peerList := []string{}
+	if *peers != "" {
+		peerList = strings.Split(*peers, ",")
+	}
+
+	store, err := NewStore(*dbPath, nodeID, peerList)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -34,9 +43,28 @@ func main() {
 	http.HandleFunc("/board", handleBoard(store))
 	http.HandleFunc("/history", handleHistory(store))
 	http.HandleFunc("/api/add", handleAdd(store))
+	http.HandleFunc("/api/sync", handleSync(store))
 
 	fmt.Printf("DeepBoard starting on http://localhost%s (Node ID: %s)\n", *addr, nodeID)
+	if len(peerList) > 0 {
+		fmt.Printf("Peers: %v\n", peerList)
+	}
 	log.Fatal(http.ListenAndServe(*addr, nil))
+}
+
+func handleSync(s *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var delta crdt.Delta[BoardState]
+		if err := json.NewDecoder(r.Body).Decode(&delta); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := s.ApplyDelta(delta); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}
 }
 
 func handleIndex(s *Store) http.HandlerFunc {

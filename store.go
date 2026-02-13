@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"sync"
 
 	"github.com/brunoga/deep/v3/crdt"
@@ -10,13 +13,14 @@ import (
 )
 
 type Store struct {
-	mu   sync.RWMutex
-	db   *sql.DB
-	crdt *crdt.CRDT[BoardState]
-	subs map[chan []byte]bool
+	mu    sync.RWMutex
+	db    *sql.DB
+	crdt  *crdt.CRDT[BoardState]
+	subs  map[chan []byte]bool
+	peers []string
 }
 
-func NewStore(dbPath string, nodeID string) (*Store, error) {
+func NewStore(dbPath string, nodeID string, peers []string) (*Store, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, err
@@ -39,8 +43,9 @@ func NewStore(dbPath string, nodeID string) (*Store, error) {
 	}
 
 	s := &Store{
-		db:   db,
-		subs: make(map[chan []byte]bool),
+		db:    db,
+		subs:  make(map[chan []byte]bool),
+		peers: peers,
 	}
 
 	// Load or initialize state
@@ -86,8 +91,27 @@ func (s *Store) Edit(fn func(*BoardState)) crdt.Delta[BoardState] {
 		s.saveState()
 		s.savePatch(delta)
 		s.broadcast(delta)
+		go s.syncToPeers(delta)
 	}
 	return delta
+}
+
+func (s *Store) syncToPeers(delta crdt.Delta[BoardState]) {
+	data, err := json.Marshal(delta)
+	if err != nil {
+		return
+	}
+
+	for _, peer := range s.peers {
+		go func(p string) {
+			url := fmt.Sprintf("http://%s/api/sync", p)
+			resp, err := http.Post(url, "application/json", bytes.NewReader(data))
+			if err != nil {
+				return
+			}
+			resp.Body.Close()
+		}(peer)
+	}
 }
 
 func (s *Store) GetHistory(limit int) []string {
