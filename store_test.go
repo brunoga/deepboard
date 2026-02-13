@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/brunoga/deep/v3/crdt"
 )
@@ -153,60 +152,38 @@ func TestStore_TextSynchronization(t *testing.T) {
 func TestStore_ConnectionTracking(t *testing.T) {
 	s1, c1 := setupTestStore(t, "conn1", "node-1")
 	defer c1()
-	s2, c2 := setupTestStore(t, "conn2", "node-2")
-	defer c2()
 
-	time.Sleep(2100 * time.Millisecond) // Wait for initial background sync
-
-	// 1. Initially 1 node connection (the current node with 0 connections)
-	if len(s1.GetBoard().NodeConnections) != 1 {
-		t.Errorf("expected 1 node connection initially, got %d", len(s1.GetBoard().NodeConnections))
-	}
-
-	// 2. Node 1 subscribes (1 connection)
-	sub1 := s1.Subscribe()
-	defer s1.Unsubscribe(sub1)
-
-	time.Sleep(2100 * time.Millisecond) // Wait for background sync
-
+	// 1. Initially registered with 0 connections
 	state1 := s1.GetBoard()
-	if len(state1.NodeConnections) != 1 {
-		t.Errorf("expected 1 node connection for node-1, got %d", len(state1.NodeConnections))
-	}
-	if state1.NodeConnections[0].NodeID != "node-1" || state1.NodeConnections[0].Count != 1 {
-		t.Errorf("unexpected node-1 connection state: %+v", state1.NodeConnections[0])
+	if len(state1.NodeConnections) != 1 || state1.NodeConnections[0].NodeID != "node-1" || state1.NodeConnections[0].Count != 0 {
+		t.Errorf("node-1: expected initial self-registration with 0, got %+v", state1.NodeConnections)
 	}
 
-	// 3. Node 2 subscribes (1 connection)
-	sub2 := s2.Subscribe()
-	defer s2.Unsubscribe(sub2)
-
-	time.Sleep(2100 * time.Millisecond) // Wait for background sync
-
-	// Sync Node 2 state to Node 1 via Merge (to simulate background sync)
-	s1.Merge(s2.crdt)
-
+	// 2. Subscribe - should increase local count immediately
+	sub1 := s1.Subscribe()
 	state1 = s1.GetBoard()
-	if len(state1.NodeConnections) != 2 {
-		t.Errorf("expected 2 node connections after merge, got %d", len(state1.NodeConnections))
+	if state1.NodeConnections[0].Count != 1 {
+		t.Errorf("node-1: expected immediate count increase to 1, got %d", state1.NodeConnections[0].Count)
 	}
 
-	total := 0
-	for _, nc := range state1.NodeConnections {
-		total += nc.Count
-	}
-	if total != 2 {
-		t.Errorf("expected total 2 connections, got %d", total)
+	// 3. Second subscriber
+	sub2 := s1.Subscribe()
+	state1 = s1.GetBoard()
+	if state1.NodeConnections[0].Count != 2 {
+		t.Errorf("node-1: expected count 2, got %d", state1.NodeConnections[0].Count)
 	}
 
-	// 4. Node 1 unsubscribes
+	// 4. Unsubscribe one
 	s1.Unsubscribe(sub1)
-	time.Sleep(2100 * time.Millisecond) // Wait for background sync
 	state1 = s1.GetBoard()
-	for _, nc := range state1.NodeConnections {
-		if nc.NodeID == "node-1" && nc.Count != 0 {
-			t.Errorf("expected 0 connections for node-1, got %d", nc.Count)
-		}
+	if state1.NodeConnections[0].Count != 1 {
+		t.Errorf("node-1: expected count 1 after unsubscribe, got %d", state1.NodeConnections[0].Count)
+	}
+
+	s1.Unsubscribe(sub2)
+	state1 = s1.GetBoard()
+	if state1.NodeConnections[0].Count != 0 {
+		t.Errorf("node-1: expected count 0 after final unsubscribe, got %d", state1.NodeConnections[0].Count)
 	}
 }
 
