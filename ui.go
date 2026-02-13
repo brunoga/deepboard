@@ -91,7 +91,7 @@ const indexHTML = `
     <header>
         <h1>DeepBoard <span style="font-size: 0.8rem; color: #3498db; vertical-align: middle;">(Node: {{.NodeID}})</span></h1>
         <div id="connection-stats" style="color: #bdc3c7; font-size: 0.8rem; margin-left: auto; margin-right: 20px;">
-            Local: {{.LocalCount}} | Total: {{.TotalCount}}
+            <span id="conn-counts">Local: {{.LocalCount}} | Total: {{.TotalCount}}</span>
             <span onclick="cleanupConnections()" style="cursor: pointer; margin-left: 10px; text-decoration: underline;" title="Force cleanup of stale nodes">🧹</span>
         </div>
         <div class="add-card-form">
@@ -125,6 +125,20 @@ const indexHTML = `
         let socket;
         let heartbeatInterval;
 
+        function updateStats() {
+            fetch('/stats').then(r => r.text()).then(text => {
+                const countsEl = document.getElementById('conn-counts');
+                if (countsEl) countsEl.innerHTML = text;
+            });
+        }
+
+        function updateHistory() {
+            fetch('/history').then(r => r.text()).then(html => {
+                const historyEl = document.getElementById('history');
+                if (historyEl) historyEl.innerHTML = html;
+            });
+        }
+
         function connect() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             socket = new WebSocket(protocol + '//' + window.location.host + '/ws');
@@ -138,7 +152,13 @@ const indexHTML = `
             };
             socket.onmessage = (e) => {
                 const msg = JSON.parse(e.data);
-                if (msg.type === 'refresh' && !msg.silent) refreshUI();
+                if (msg.type === 'refresh') {
+                    if (msg.silent) {
+                        updateStats();
+                    } else {
+                        refreshUI();
+                    }
+                }
             };
             socket.onclose = () => {
                 clearInterval(heartbeatInterval);
@@ -152,8 +172,8 @@ const indexHTML = `
         function refreshUI() {
             console.log('Refreshing UI...');
             // Update History & Stats
-            fetch('/history').then(r => r.text()).then(html => document.getElementById('history').innerHTML = html);
-            fetch('/stats').then(r => r.text()).then(text => document.getElementById('connection-stats').innerHTML = text);
+            updateHistory();
+            updateStats();
             
             const activeId = document.activeElement && document.activeElement.classList.contains('card-desc') ? document.activeElement.id : null;
 

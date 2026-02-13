@@ -231,6 +231,26 @@ func TestStore_ConnectionTracking(t *testing.T) {
 	s2.Unsubscribe(sub2_2)
 }
 
+func TestStore_BroadcastOnSubscribe(t *testing.T) {
+	s, cleanup := setupTestStore(t, "broadcast", "node-1")
+	defer cleanup()
+
+	// Initial subscribe should trigger a broadcast
+	sub := s.Subscribe()
+	
+	select {
+	case msg := <-sub:
+		if msg.Type != "refresh" {
+			t.Errorf("expected refresh message, got %s", msg.Type)
+		}
+		if !msg.Silent {
+			t.Error("expected silent refresh for connection update")
+		}
+	case <-time.After(1 * time.Second):
+		t.Error("timed out waiting for broadcast message")
+	}
+}
+
 func TestStore_CardOperations(t *testing.T) {
 	s, cleanup := setupTestStore(t, "ops", "node-1")
 	defer cleanup()
