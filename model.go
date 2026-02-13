@@ -12,6 +12,11 @@ type Card struct {
 	Assignee    string    `json:"assignee"`
 }
 
+type NodeConnection struct {
+	NodeID string `deep:"key" json:"nodeID"`
+	Count  int    `json:"count"`
+}
+
 type Column struct {
 	ID    string `deep:"key" json:"id"`
 	Title string `json:"title"`
@@ -26,7 +31,8 @@ type Board struct {
 
 // BoardState is the top-level structure we wrap in a CRDT.
 type BoardState struct {
-	Board Board `json:"board"`
+	Board           Board            `json:"board"`
+	NodeConnections []NodeConnection `json:"nodeConnections"`
 }
 
 func NewInitialBoard() BoardState {
@@ -60,5 +66,6 @@ func NewInitialBoard() BoardState {
 				},
 			},
 		},
+		NodeConnections: []NodeConnection{},
 	}
 }

@@ -42,6 +42,7 @@ func main() {
 	http.HandleFunc("/", handleIndex(store))
 	http.HandleFunc("/ws", handleWS(store))
 	http.HandleFunc("/board", handleBoard(store))
+	http.HandleFunc("/stats", handleStats(store))
 	http.HandleFunc("/history", handleHistory(store))
 	http.HandleFunc("/api/add", handleAdd(store))
 	http.HandleFunc("/api/sync", handleSync(store))
@@ -122,15 +123,41 @@ func handleIndex(s *Store) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		state := s.GetBoard()
+		localCount, totalCount := getConnectionCounts(state)
 		data := struct {
-			Board   Board
-			History []string
+			Board      Board
+			History    []string
+			LocalCount int
+			TotalCount int
 		}{
-			Board:   s.GetBoard().Board,
-			History: s.GetHistory(15),
+			Board:      state.Board,
+			History:    s.GetHistory(15),
+			LocalCount: localCount,
+			TotalCount: totalCount,
 		}
 		tmpl.Execute(w, data)
 	}
+}
+
+func handleStats(s *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		state := s.GetBoard()
+		localCount, totalCount := getConnectionCounts(state)
+		fmt.Fprintf(w, "Local: %d | Total: %d", localCount, totalCount)
+	}
+}
+
+func getConnectionCounts(state BoardState) (int, int) {
+	localCount := 0
+	totalCount := 0
+	for _, nc := range state.NodeConnections {
+		if nc.NodeID == nodeID {
+			localCount = nc.Count
+		}
+		totalCount += nc.Count
+	}
+	return localCount, totalCount
 }
 
 func handleBoard(s *Store) http.HandlerFunc {
@@ -376,6 +403,9 @@ const indexHTML = `
 <body>
     <header>
         <h1>DeepBoard</h1>
+        <div id="connection-stats" style="color: #bdc3c7; font-size: 0.8rem; margin-left: auto; margin-right: 20px;">
+            Local: {{.LocalCount}} | Total: {{.TotalCount}}
+        </div>
         <div class="add-card-form">
             <form action="/api/add" method="POST" style="display: flex; gap: 8px;">
                 <input type="text" name="title" placeholder="What needs to be done?" required>
@@ -414,6 +444,11 @@ const indexHTML = `
             // Update History
             fetch('/history').then(r => r.text()).then(html => {
                 document.getElementById('history').innerHTML = html;
+            });
+
+            // Update Stats
+            fetch('/stats').then(r => r.text()).then(text => {
+                document.getElementById('connection-stats').innerHTML = text;
             });
             
             const active = document.activeElement;

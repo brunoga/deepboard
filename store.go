@@ -13,11 +13,12 @@ import (
 )
 
 type Store struct {
-	mu    sync.RWMutex
-	db    *sql.DB
-	crdt  *crdt.CRDT[BoardState]
-	subs  map[chan []byte]bool
-	peers []string
+	mu     sync.RWMutex
+	db     *sql.DB
+	crdt   *crdt.CRDT[BoardState]
+	subs   map[chan []byte]bool
+	peers  []string
+	nodeID string
 }
 
 func NewStore(dbPath string, nodeID string, peers []string) (*Store, error) {
@@ -43,9 +44,10 @@ func NewStore(dbPath string, nodeID string, peers []string) (*Store, error) {
 	}
 
 	s := &Store{
-		db:    db,
-		subs:  make(map[chan []byte]bool),
-		peers: peers,
+		db:     db,
+		subs:   make(map[chan []byte]bool),
+		peers:  peers,
+		nodeID: nodeID,
 	}
 
 	// Load or initialize state
@@ -62,6 +64,8 @@ func NewStore(dbPath string, nodeID string, peers []string) (*Store, error) {
 			return nil, err
 		}
 	}
+
+	s.updateConnections(0)
 
 	return s, nil
 }
@@ -159,18 +163,47 @@ func (s *Store) savePatch(delta crdt.Delta[BoardState]) {
 }
 
 func (s *Store) Subscribe() chan []byte {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	ch := make(chan []byte, 10)
+	s.mu.Lock()
 	s.subs[ch] = true
+	count := len(s.subs)
+	s.mu.Unlock()
+
+	s.updateConnections(count)
 	return ch
 }
 
 func (s *Store) Unsubscribe(ch chan []byte) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if _, ok := s.subs[ch]; !ok {
+		s.mu.Unlock()
+		return
+	}
 	delete(s.subs, ch)
 	close(ch)
+	count := len(s.subs)
+	s.mu.Unlock()
+
+	s.updateConnections(count)
+}
+
+func (s *Store) updateConnections(count int) {
+	s.Edit(func(bs *BoardState) {
+		found := false
+		for i, nc := range bs.NodeConnections {
+			if nc.NodeID == s.nodeID {
+				bs.NodeConnections[i].Count = count
+				found = true
+				break
+			}
+		}
+		if !found {
+			bs.NodeConnections = append(bs.NodeConnections, NodeConnection{
+				NodeID: s.nodeID,
+				Count:  count,
+			})
+		}
+	})
 }
 
 func (s *Store) broadcast(delta *crdt.Delta[BoardState]) {
