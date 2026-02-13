@@ -612,7 +612,6 @@ const indexHTML = `
         let refreshTimeout;
 
         function refreshUI() {
-            console.log('Refreshing UI...');
             // Update History & Stats
             fetch('/history').then(r => r.text()).then(html => document.getElementById('history').innerHTML = html);
             fetch('/stats').then(r => r.text()).then(text => document.getElementById('connection-stats').innerHTML = text);
@@ -623,17 +622,31 @@ const indexHTML = `
                 const temp = document.createElement('div');
                 temp.innerHTML = html;
                 
+                // If nothing is being edited, just replace the whole board for 100% reliability
+                if (!activeId) {
+                    document.getElementById('board').innerHTML = temp.querySelector('#board').innerHTML;
+                    initSortable(); initTextareas();
+                    return;
+                }
+
                 temp.querySelectorAll('.card-list').forEach(newList => {
                     const oldList = document.getElementById(newList.id);
                     if (!oldList) return;
 
-                    // Update existing cards and add new ones
-                    newList.querySelectorAll('.card').forEach(newCard => {
+                    const newCards = Array.from(newList.querySelectorAll('.card'));
+                    const newIds = new Set(newCards.map(c => c.dataset.id));
+
+                    // 1. Remove cards that are no longer present
+                    oldList.querySelectorAll('.card').forEach(oldCard => {
+                        if (!newIds.has(oldCard.dataset.id)) oldCard.remove();
+                    });
+
+                    // 2. Update existing or add new
+                    newCards.forEach(newCard => {
                         const oldCard = oldList.querySelector('[data-id="' + newCard.dataset.id + '"]');
                         if (!oldCard) {
-                            oldList.appendChild(newCard);
+                            oldList.appendChild(newCard.cloneNode(true));
                         } else {
-                            // Update title and presence
                             oldCard.querySelector('.card-title').innerText = newCard.querySelector('.card-title').innerText;
                             oldCard.querySelector('.presence-list').innerHTML = newCard.querySelector('.presence-list').innerHTML;
                             
@@ -642,22 +655,14 @@ const indexHTML = `
                             const now = Date.now(), lastTyped = lastInputTime[oldTA.id] || 0;
                             
                             if (oldTA.id === activeId || (now - lastTyped < 1000)) {
-                                console.log('Ignoring text update for ' + oldTA.id + ' due to active editing');
-                                // Schedule a catch-up refresh
+                                // Keep local text, but schedule a catch-up
                                 clearTimeout(refreshTimeout);
                                 refreshTimeout = setTimeout(refreshUI, 1100);
-                            } else {
-                                if (oldTA.value !== newTA.value) {
-                                    oldTA.value = newTA.value;
-                                    oldTA.dataset.lastValue = newTA.value;
-                                }
+                            } else if (oldTA.value !== newTA.value) {
+                                oldTA.value = newTA.value;
+                                oldTA.dataset.lastValue = newTA.value;
                             }
                         }
-                    });
-
-                    // Remove cards that are no longer present
-                    oldList.querySelectorAll('.card').forEach(oldCard => {
-                        if (!newList.querySelector('[data-id="' + oldCard.dataset.id + '"]')) oldCard.remove();
                     });
                 });
 
