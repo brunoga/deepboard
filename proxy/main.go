@@ -76,6 +76,26 @@ func (s *ServerPool) GetBackendByURL(u string) *Backend {
 	return nil
 }
 
+func (s *ServerPool) GetBackendByIdentifier(id string) *Backend {
+	s.mux.RLock()
+	defer s.mux.RUnlock()
+
+	// Try as 1-based index
+	var idx int
+	if _, err := fmt.Sscanf(id, "%d", &idx); err == nil {
+		if idx > 0 && idx <= len(s.backends) {
+			return s.backends[idx-1]
+		}
+	}
+
+	for _, b := range s.backends {
+		if b.URL.String() == id || b.URL.Host == id || strings.Split(b.URL.Host, ":")[0] == id {
+			return b
+		}
+	}
+	return nil
+}
+
 var serverPool ServerPool
 
 const stickyCookieName = "SERVERID"
@@ -85,11 +105,29 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Request: %s %s [Upgrade: %s]", r.Method, r.URL.Path, r.Header.Get("Upgrade"))
 
-	// Check for sticky cookie
-	if cookie, err := r.Cookie(stickyCookieName); err == nil {
-		backend = serverPool.GetBackendByURL(cookie.Value)
+	// Check for URL parameter to force node
+	if node := r.URL.Query().Get("node"); node != "" {
+		backend = serverPool.GetBackendByIdentifier(node)
 		if backend != nil && !backend.IsAlive() {
 			backend = nil
+		}
+		if backend != nil {
+			// Update sticky cookie to match forced node
+			http.SetCookie(w, &http.Cookie{
+				Name:  stickyCookieName,
+				Value: backend.URL.String(),
+				Path:  "/",
+			})
+		}
+	}
+
+	// Check for sticky cookie
+	if backend == nil {
+		if cookie, err := r.Cookie(stickyCookieName); err == nil {
+			backend = serverPool.GetBackendByURL(cookie.Value)
+			if backend != nil && !backend.IsAlive() {
+				backend = nil
+			}
 		}
 	}
 
