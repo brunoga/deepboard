@@ -527,6 +527,8 @@ const indexHTML = `
             socket.onclose = () => setTimeout(connect, 1000);
         }
 
+        const lastInputTime = {};
+
         function refreshUI() {
             // Update History
             fetch('/history').then(r => r.text()).then(html => {
@@ -540,57 +542,48 @@ const indexHTML = `
             
             const active = document.activeElement;
             const activeId = active && active.classList.contains('card-desc') ? active.id : null;
-            const cursor = activeId ? active.selectionStart : 0;
 
             // Update Board
             fetch('/board').then(r => r.text()).then(html => {
                 const temp = document.createElement('div');
                 temp.innerHTML = html;
                 
-                // Update columns but preserve active textarea
                 document.querySelectorAll('.column').forEach((col, i) => {
                     const newCol = temp.querySelectorAll('.column')[i];
                     if (!newCol) return;
 
-                    // Update presence lists regardless
                     col.querySelectorAll('.presence-list').forEach((pl, j) => {
                         const newPl = newCol.querySelectorAll('.presence-list')[j];
                         if (newPl) pl.innerHTML = newPl.innerHTML;
                     });
 
-                    // Update card lists but be careful with textareas
                     const list = col.querySelector('.card-list');
                     const newList = newCol.querySelector('.card-list');
                     
-                    if (activeId && list.querySelector('#' + activeId)) {
-                        // If this column contains the active textarea, we update only the non-active parts
-                        newList.querySelectorAll('.card').forEach(newCard => {
-                            const cardId = newCard.dataset.id;
-                            const oldCard = list.querySelector('[data-id="' + cardId + '"]');
-                            if (!oldCard) {
-                                list.appendChild(newCard);
-                            } else {
-                                // Update title
-                                oldCard.querySelector('.card-title').innerText = newCard.querySelector('.card-title').innerText;
-                                // Update textarea ONLY if it's not the active one
-                                const oldTA = oldCard.querySelector('.card-desc');
-                                const newTA = newCard.querySelector('.card-desc');
-                                if (oldTA.id !== activeId) {
-                                    oldTA.value = newTA.value;
-                                    oldTA.dataset.lastValue = newTA.value;
-                                }
+                    newList.querySelectorAll('.card').forEach(newCard => {
+                        const cardId = newCard.dataset.id;
+                        const oldCard = list.querySelector('[data-id="' + cardId + '"]');
+                        if (!oldCard) {
+                            list.appendChild(newCard);
+                        } else {
+                            oldCard.querySelector('.card-title').innerText = newCard.querySelector('.card-title').innerText;
+                            const oldTA = oldCard.querySelector('.card-desc');
+                            const newTA = newCard.querySelector('.card-desc');
+                            
+                            // Guard: Only update if we haven't typed here recently (within 1 second)
+                            const now = Date.now();
+                            const lastTyped = lastInputTime[oldTA.id] || 0;
+                            if (oldTA.id !== activeId && (now - lastTyped > 1000)) {
+                                oldTA.value = newTA.value;
+                                oldTA.dataset.lastValue = newTA.value;
                             }
-                        });
-                        // Remove deleted cards
-                        list.querySelectorAll('.card').forEach(oldCard => {
-                            if (!newList.querySelector('[data-id="' + oldCard.dataset.id + '"]')) {
-                                oldCard.remove();
-                            }
-                        });
-                    } else {
-                        // No active textarea here, safe to replace content
-                        list.innerHTML = newList.innerHTML;
-                    }
+                        }
+                    });
+                    list.querySelectorAll('.card').forEach(oldCard => {
+                        if (!newList.querySelector('[data-id="' + oldCard.dataset.id + '"]')) {
+                            oldCard.remove();
+                        }
+                    });
                 });
 
                 initSortable(); initTextareas();
@@ -641,6 +634,7 @@ const indexHTML = `
                 };
 
                 el.oninput = () => {
+                    lastInputTime[el.id] = Date.now();
                     sendCursor();
                     clearTimeout(inputTimeout);
                     inputTimeout = setTimeout(() => {
@@ -651,7 +645,7 @@ const indexHTML = `
                         if (oe >= s) socket.send(JSON.stringify({type:'textOp', textOp:{cardId:el.id.slice(5), op:'delete', pos:s, length:oe-s+1}}));
                         if (ne >= s) socket.send(JSON.stringify({type:'textOp', textOp:{cardId:el.id.slice(5), op:'insert', pos:s, val:val.substring(s, ne+1)}}));
                         el.dataset.lastValue = val;
-                    }, 250); // Increased from 100ms to 250ms
+                    }, 150); // Reduced to 150ms for better feel
                 };
             });
         }
