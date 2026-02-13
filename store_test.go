@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brunoga/deep/v3/crdt"
 )
@@ -152,39 +153,82 @@ func TestStore_TextSynchronization(t *testing.T) {
 func TestStore_ConnectionTracking(t *testing.T) {
 	s1, c1 := setupTestStore(t, "conn1", "node-1")
 	defer c1()
+	s2, c2 := setupTestStore(t, "conn2", "node-2")
+	defer c2()
 
-	// 1. Initially registered with 0 connections
+	// 1. Initially both nodes should have themselves registered with 0 connections
 	state1 := s1.GetBoard()
-	if len(state1.NodeConnections) != 1 || state1.NodeConnections[0].NodeID != "node-1" || state1.NodeConnections[0].Count != 0 {
-		t.Errorf("node-1: expected initial self-registration with 0, got %+v", state1.NodeConnections)
+	l1, _ := getConnectionCounts(state1, "node-1")
+	if l1 != 0 {
+		t.Errorf("node-1: expected initial local count 0, got %d", l1)
 	}
 
-	// 2. Subscribe - should increase local count immediately
+	state2 := s2.GetBoard()
+	l2, _ := getConnectionCounts(state2, "node-2")
+	if l2 != 0 {
+		t.Errorf("node-2: expected initial local count 0, got %d", l2)
+	}
+
+	// 2. Node 1 subscribes - should increase local count immediately
 	sub1 := s1.Subscribe()
 	state1 = s1.GetBoard()
-	if state1.NodeConnections[0].Count != 1 {
-		t.Errorf("node-1: expected immediate count increase to 1, got %d", state1.NodeConnections[0].Count)
+	l1, _ = getConnectionCounts(state1, "node-1")
+	if l1 != 1 {
+		t.Errorf("node-1: expected immediate count increase to 1, got %d", l1)
 	}
 
-	// 3. Second subscriber
-	sub2 := s1.Subscribe()
+	// 3. Sync Node 1 to Node 2 (Remote increase)
+	s2.Merge(s1.crdt)
+	state2 = s2.GetBoard()
+	l1remote, total := getConnectionCounts(state2, "node-1")
+	if l1remote != 1 {
+		t.Errorf("node-2: expected remote node-1 count to be 1, got %d", l1remote)
+	}
+	if total != 1 {
+		t.Errorf("node-2: expected total count 1, got %d", total)
+	}
+
+	// 4. Node 2 subscribes twice
+	sub2_1 := s2.Subscribe()
+	sub2_2 := s2.Subscribe()
+	state2 = s2.GetBoard()
+	l2, total = getConnectionCounts(state2, "node-2")
+	if l2 != 2 {
+		t.Errorf("node-2: expected local count 2, got %d", l2)
+	}
+	if total != 3 { // node-1 (1) + node-2 (2)
+		t.Errorf("node-2: expected total count 3, got %d", total)
+	}
+
+	// 5. Sync Node 2 back to Node 1
+	// We use a small sleep to ensure clocks are strictly increasing for the merge to be predictable
+	time.Sleep(10 * time.Millisecond)
+	s1.UpdateConnections(1) // Heartbeat to advance clock
+	s1.Merge(s2.crdt)
+	
 	state1 = s1.GetBoard()
-	if state1.NodeConnections[0].Count != 2 {
-		t.Errorf("node-1: expected count 2, got %d", state1.NodeConnections[0].Count)
+	l1, total = getConnectionCounts(state1, "node-1")
+	if l1 != 1 {
+		t.Errorf("node-1: expected local count 1, got %d", l1)
+	}
+	l2remote, _ := getConnectionCounts(state1, "node-2")
+	if l2remote != 2 {
+		t.Errorf("node-1: expected remote node-2 count 2, got %d", l2remote)
+	}
+	if total != 3 {
+		t.Errorf("node-1: expected total count 3, got %d", total)
 	}
 
-	// 4. Unsubscribe one
+	// 6. Node 2 unsubscribes one
+	s2.Unsubscribe(sub2_1)
+	s1.Merge(s2.crdt) // Sync again
+	_, total = getConnectionCounts(s1.GetBoard(), "node-1")
+	if total != 2 { // node-1 (1) + node-2 (1)
+		t.Errorf("final: expected total count 2, got %d", total)
+	}
+
 	s1.Unsubscribe(sub1)
-	state1 = s1.GetBoard()
-	if state1.NodeConnections[0].Count != 1 {
-		t.Errorf("node-1: expected count 1 after unsubscribe, got %d", state1.NodeConnections[0].Count)
-	}
-
-	s1.Unsubscribe(sub2)
-	state1 = s1.GetBoard()
-	if state1.NodeConnections[0].Count != 0 {
-		t.Errorf("node-1: expected count 0 after final unsubscribe, got %d", state1.NodeConnections[0].Count)
-	}
+	s2.Unsubscribe(sub2_2)
 }
 
 func TestStore_CardOperations(t *testing.T) {

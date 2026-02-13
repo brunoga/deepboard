@@ -240,16 +240,16 @@ func handleIndex(s *Store) http.HandlerFunc {
 func handleStats(s *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		state := s.GetBoard()
-		localCount, totalCount := getConnectionCounts(state)
+		localCount, totalCount := getConnectionCounts(state, s.nodeID)
 		fmt.Fprintf(w, "Local: %d | Total: %d", localCount, totalCount)
 	}
 }
 
-func getConnectionCounts(state BoardState) (int, int) {
+func getConnectionCounts(state BoardState, nodeID string) (int, int) {
 	localCount := 0
 	totalCount := 0
 	for _, nc := range state.NodeConnections {
-		if nc.NodeID == *nodeID {
+		if nc.NodeID == nodeID {
 			localCount = nc.Count
 		}
 		totalCount += nc.Count
@@ -294,7 +294,7 @@ type UIData struct {
 
 func prepareUIData(s *Store) UIData {
 	state := s.GetBoard()
-	localCount, totalCount := getConnectionCounts(state)
+	localCount, totalCount := getConnectionCounts(state, s.nodeID)
 
 	uiColumns := make([]UIColumn, len(state.Board.Columns))
 	colMap := make(map[string]int)
