@@ -70,6 +70,12 @@ func NewStore(dbPath string, nodeID string, peers []string) (*Store, error) {
 	return s, nil
 }
 
+func (s *Store) UpdatePeers(peers []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.peers = peers
+}
+
 func (s *Store) GetBoard() BoardState {
 	return s.crdt.View()
 }
@@ -106,7 +112,12 @@ func (s *Store) syncToPeers(delta crdt.Delta[BoardState]) {
 		return
 	}
 
-	for _, peer := range s.peers {
+	s.mu.RLock()
+	currentPeers := make([]string, len(s.peers))
+	copy(currentPeers, s.peers)
+	s.mu.RUnlock()
+
+	for _, peer := range currentPeers {
 		go func(p string) {
 			url := fmt.Sprintf("http://%s/api/sync", p)
 			resp, err := http.Post(url, "application/json", bytes.NewReader(data))

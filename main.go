@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"html/template"
 	"log"
+	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -19,7 +21,8 @@ var (
 	addr   = flag.String("addr", ":8080", "http service address")
 	dbPath = flag.String("db", "deepboard.db", "path to sqlite database")
 	peers  = flag.String("peers", "", "comma-separated list of peer addresses")
-	nodeID = uuid.New().String()
+	nodeID = flag.String("node-id", uuid.New().String(), "unique identifier for this node")
+	nodeIDFromEnv = flag.Bool("node-id-from-env", false, "use NODE_ID_ENV environment variable for node ID")
 )
 
 var upgrader = websocket.Upgrader{
@@ -29,14 +32,30 @@ var upgrader = websocket.Upgrader{
 func main() {
 	flag.Parse()
 
+	if *nodeIDFromEnv {
+		envVar := os.Getenv("NODE_ID_ENV")
+		if envVar == "" {
+			envVar = "HOSTNAME"
+		}
+		id := os.Getenv(envVar)
+		if id != "" {
+			*nodeID = id
+		}
+	}
+
 	peerList := []string{}
 	if *peers != "" {
 		peerList = strings.Split(*peers, ",")
 	}
 
-	store, err := NewStore(*dbPath, nodeID, peerList)
+	store, err := NewStore(*dbPath, *nodeID, peerList)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	// Dynamic Peer Discovery if peers look like a single hostname without comma
+	if len(peerList) == 1 && !strings.Contains(peerList[0], ":") {
+		go discoverPeers(store, peerList[0])
 	}
 
 	http.HandleFunc("/", handleIndex(store))
@@ -48,12 +67,27 @@ func main() {
 	http.HandleFunc("/api/sync", handleSync(store))
 	http.HandleFunc("/api/state", handleState(store))
 
-	fmt.Printf("DeepBoard starting on http://localhost%s (Node ID: %s)\n", *addr, nodeID)
+	fmt.Printf("DeepBoard starting on http://localhost%s (Node ID: %s)\n", *addr, *nodeID)
 	if len(peerList) > 0 {
 		fmt.Printf("Peers: %v\n", peerList)
 		go startBackgroundSync(store)
 	}
 	log.Fatal(http.ListenAndServe(*addr, nil))
+}
+
+func discoverPeers(s *Store, serviceName string) {
+	for {
+		ips, err := net.LookupIP(serviceName)
+		if err == nil {
+			newPeers := []string{}
+			for _, ip := range ips {
+				peerAddr := fmt.Sprintf("%s:8080", ip.String())
+				newPeers = append(newPeers, peerAddr)
+			}
+			s.UpdatePeers(newPeers)
+		}
+		time.Sleep(30 * time.Second)
+	}
 }
 
 func handleState(s *Store) http.HandlerFunc {
@@ -65,15 +99,15 @@ func handleState(s *Store) http.HandlerFunc {
 }
 
 func startBackgroundSync(s *Store) {
-	// Immediate sync on startup
-	for _, peer := range s.peers {
-		syncWithPeer(s, peer)
-	}
-
 	// Periodic sync every 30 seconds
 	ticker := time.NewTicker(30 * time.Second)
 	for range ticker.C {
-		for _, peer := range s.peers {
+		s.mu.RLock()
+		currentPeers := make([]string, len(s.peers))
+		copy(currentPeers, s.peers)
+		s.mu.RUnlock()
+
+		for _, peer := range currentPeers {
 			syncWithPeer(s, peer)
 		}
 	}
@@ -126,11 +160,13 @@ func handleIndex(s *Store) http.HandlerFunc {
 		state := s.GetBoard()
 		localCount, totalCount := getConnectionCounts(state)
 		data := struct {
+			NodeID     string
 			Board      Board
 			History    []string
 			LocalCount int
 			TotalCount int
 		}{
+			NodeID:     *nodeID,
 			Board:      state.Board,
 			History:    s.GetHistory(15),
 			LocalCount: localCount,
@@ -152,7 +188,7 @@ func getConnectionCounts(state BoardState) (int, int) {
 	localCount := 0
 	totalCount := 0
 	for _, nc := range state.NodeConnections {
-		if nc.NodeID == nodeID {
+		if nc.NodeID == *nodeID {
 			localCount = nc.Count
 		}
 		totalCount += nc.Count
@@ -402,7 +438,7 @@ const indexHTML = `
 </head>
 <body>
     <header>
-        <h1>DeepBoard</h1>
+        <h1>DeepBoard <span style="font-size: 0.8rem; color: #3498db; vertical-align: middle;">(Node: {{.NodeID}})</span></h1>
         <div id="connection-stats" style="color: #bdc3c7; font-size: 0.8rem; margin-left: auto; margin-right: 20px;">
             Local: {{.LocalCount}} | Total: {{.TotalCount}}
         </div>

@@ -1,0 +1,22 @@
+services:
+  node:
+    build: .
+    # Use a generic name for scaling
+    command: ["-addr", ":8080", "-db", "/data/deepboard-$${HOSTNAME}.db", "-peers", "node", "-node-id-from-env"]
+    environment:
+      - NODE_ID_ENV=HOSTNAME # Docker sets HOSTNAME to container ID by default
+    volumes:
+      - node-data:/data
+
+  proxy:
+    build: ./proxy
+    ports:
+      - "9000:9000"
+    environment:
+      - DISCOVERY_SERVICE=node
+      - PROXY_PORT=9000
+    depends_on:
+      - node
+
+volumes:
+  node-data:

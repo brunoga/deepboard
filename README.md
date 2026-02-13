@@ -15,7 +15,7 @@ DeepBoard is a sample toy project designed to demonstrate how the [Deep](https:/
 
 ### Prerequisites
 
-- Go 1.24 or later
+- Go 1.25 or later
 
 ### Running DeepBoard
 
