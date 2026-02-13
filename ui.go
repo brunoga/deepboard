@@ -83,8 +83,8 @@ const indexHTML = `
         .clear-btn { background: #e74c3c; color: white; border: none; border-radius: 4px; padding: 4px 8px; font-size: 0.7rem; cursor: pointer; transition: background 0.2s; }
         .clear-btn:hover { background: #c0392b; }
 
-        .reset-btn { background: #e74c3c; color: white; border: none; border-radius: 6px; padding: 0 16px; font-size: 0.8rem; font-weight: bold; cursor: pointer; text-transform: uppercase; transition: background 0.2s; height: 38px; box-sizing: border-box; margin-left: 10px; }
-        .reset-btn:hover { background: #c0392b; }
+        .add-card-form button.reset-btn { background: #e74c3c; color: white; border: none; border-radius: 6px; padding: 0 16px; font-size: 0.8rem; font-weight: bold; cursor: pointer; text-transform: uppercase; transition: background 0.2s; height: 38px; box-sizing: border-box; margin-left: 10px; }
+        .add-card-form button.reset-btn:hover { background: #c0392b; }
     </style>
 </head>
 <body>
