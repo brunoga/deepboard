@@ -177,6 +177,13 @@ func (s *Store) GetHistory(limit int) []string {
 	return history
 }
 
+func (s *Store) ClearHistory() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.db.Exec("DELETE FROM patches")
+	s.broadcast(nil)
+}
+
 func (s *Store) saveState() {
 	data, _ := json.Marshal(s.crdt)
 	s.db.Exec("INSERT OR REPLACE INTO state (id, data) VALUES ('latest', ?)", data)
@@ -253,9 +260,7 @@ func (s *Store) broadcast(delta *crdt.Delta[BoardState]) {
 		data, _ = json.Marshal(map[string]string{"type": "refresh"})
 	}
 
-	s.mu.RLock()
 	subCount := len(s.subs)
-	s.mu.RUnlock()
 	if subCount > 0 {
 		log.Printf("Broadcasting refresh to %d subscribers", subCount)
 	}

@@ -66,13 +66,79 @@ func main() {
 	http.HandleFunc("/api/add", handleAdd(store))
 	http.HandleFunc("/api/sync", handleSync(store))
 	http.HandleFunc("/api/state", handleState(store))
+	http.HandleFunc("/api/history/clear", handleClearHistory(store))
+	http.HandleFunc("/api/connections/cleanup", handleCleanupConnections(store))
 
 	fmt.Printf("DeepBoard starting on http://localhost%s (Node ID: %s)\n", *addr, *nodeID)
 	if len(peerList) > 0 {
 		fmt.Printf("Peers: %v\n", peerList)
 		go startBackgroundSync(store)
+		go startConnectionCleanup(store)
 	}
 	log.Fatal(http.ListenAndServe(*addr, nil))
+}
+
+func startConnectionCleanup(s *Store) {
+	ticker := time.NewTicker(1 * time.Minute)
+	for range ticker.C {
+		s.SilentEdit(func(bs *BoardState) {
+			s.mu.RLock()
+			currentPeers := make([]string, len(s.peers))
+			copy(currentPeers, s.peers)
+			s.mu.RUnlock()
+
+			peerMap := make(map[string]bool)
+			for _, p := range currentPeers {
+				// peers are host:port, we want to match NodeID which is usually HOSTNAME
+				host := strings.Split(p, ":")[0]
+				peerMap[host] = true
+			}
+			peerMap[*nodeID] = true // Don't delete ourselves
+
+			newConns := []NodeConnection{}
+			for _, nc := range bs.NodeConnections {
+				// If the node is still in our peer list (or it is us), keep it
+				if peerMap[nc.NodeID] {
+					newConns = append(newConns, nc)
+				}
+			}
+			bs.NodeConnections = newConns
+		})
+	}
+}
+
+func handleClearHistory(s *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.ClearHistory()
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func handleCleanupConnections(s *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.SilentEdit(func(bs *BoardState) {
+			s.mu.RLock()
+			currentPeers := make([]string, len(s.peers))
+			copy(currentPeers, s.peers)
+			s.mu.RUnlock()
+
+			peerMap := make(map[string]bool)
+			for _, p := range currentPeers {
+				host := strings.Split(p, ":")[0]
+				peerMap[host] = true
+			}
+			peerMap[*nodeID] = true
+
+			newConns := []NodeConnection{}
+			for _, nc := range bs.NodeConnections {
+				if peerMap[nc.NodeID] {
+					newConns = append(newConns, nc)
+				}
+			}
+			bs.NodeConnections = newConns
+		})
+		w.WriteHeader(http.StatusOK)
+	}
 }
 
 func discoverPeers(s *Store, serviceName string) {
@@ -484,6 +550,11 @@ const indexHTML = `
 
         .presence-list { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
         .presence-tag { font-size: 0.7rem; background: #e0e0e0; padding: 2px 6px; border-radius: 4px; color: #666; }
+
+        .sidebar-header { display: flex; justify-content: space-between; align-items: center; padding: 0 12px; background: #95a5a6; border-radius: 10px 10px 0 0; color: white; }
+        .sidebar-header h3 { background: none !important; box-shadow: none !important; margin: 0; }
+        .clear-btn { background: #e74c3c; color: white; border: none; border-radius: 4px; padding: 4px 8px; font-size: 0.7rem; cursor: pointer; transition: background 0.2s; }
+        .clear-btn:hover { background: #c0392b; }
     </style>
 </head>
 <body>
@@ -491,6 +562,7 @@ const indexHTML = `
         <h1>DeepBoard <span style="font-size: 0.8rem; color: #3498db; vertical-align: middle;">(Node: {{.NodeID}})</span></h1>
         <div id="connection-stats" style="color: #bdc3c7; font-size: 0.8rem; margin-left: auto; margin-right: 20px;">
             Local: {{.LocalCount}} | Total: {{.TotalCount}}
+            <span onclick="cleanupConnections()" style="cursor: pointer; margin-left: 10px; text-decoration: underline;" title="Force cleanup of stale nodes">🧹</span>
         </div>
         <div class="add-card-form">
             <form action="/api/add" method="POST" style="display: flex; gap: 8px;">
@@ -506,7 +578,10 @@ const indexHTML = `
         </div>
 
         <div class="sidebar">
-            <h3>Activity</h3>
+            <div class="sidebar-header">
+                <h3>Activity</h3>
+                <button onclick="clearHistory()" class="clear-btn">Clear</button>
+            </div>
             <div class="history-list" id="history">
                 {{range .History}}
                 <div class="history-entry">{{.}}</div>
@@ -588,6 +663,16 @@ const indexHTML = `
             if (confirm('Delete this card?')) {
                 socket.send(JSON.stringify({type: 'delete', delete: {cardId}}));
             }
+        }
+
+        function clearHistory() {
+            if (confirm('Clear activity history?')) {
+                fetch('/api/history/clear').then(() => refreshUI());
+            }
+        }
+
+        function cleanupConnections() {
+            fetch('/api/connections/cleanup').then(() => refreshUI());
         }
 
         function initSortable() {
