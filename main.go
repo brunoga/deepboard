@@ -29,6 +29,17 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
+const (
+	// Time allowed to write a message to the peer.
+	writeWait = 10 * time.Second
+
+	// Time allowed to read the next pong message from the peer.
+	pongWait = 60 * time.Second
+
+	// Send pings to peer with this period. Must be less than pongWait.
+	pingPeriod = (pongWait * 9) / 10
+)
+
 func main() {
 	flag.Parse()
 
@@ -336,7 +347,13 @@ func handleWS(s *Store) http.HandlerFunc {
 			return
 		}
 		log.Printf("WebSocket connected: %s", r.RemoteAddr)
-		defer conn.Close()
+
+		conn.SetReadLimit(512 * 1024) // 512KB
+		conn.SetReadDeadline(time.Now().Add(pongWait))
+		conn.SetPongHandler(func(string) error {
+			conn.SetReadDeadline(time.Now().Add(pongWait))
+			return nil
+		})
 
 		connID := uuid.New().String()
 		defer s.removeCursor(connID)
@@ -344,18 +361,49 @@ func handleWS(s *Store) http.HandlerFunc {
 		sub := s.Subscribe()
 		defer s.Unsubscribe(sub)
 
+		// Create a channel to signal when the connection is closed
+		done := make(chan struct{})
+
+		// Write loop (subscribers + pings)
 		go func() {
-			for msg := range sub {
-				if !msg.Silent {
-					log.Printf("Refresh triggered for client %s", connID)
+			ticker := time.NewTicker(pingPeriod)
+			defer func() {
+				ticker.Stop()
+				conn.Close()
+			}()
+
+			for {
+				select {
+				case msg, ok := <-sub:
+					if !ok {
+						conn.SetWriteDeadline(time.Now().Add(writeWait))
+						conn.WriteMessage(websocket.CloseMessage, []byte{})
+						return
+					}
+					if !msg.Silent {
+						log.Printf("Refresh triggered for client %s", connID)
+					}
+					conn.SetWriteDeadline(time.Now().Add(writeWait))
+					if err := conn.WriteJSON(msg); err != nil {
+						return
+					}
+				case <-ticker.C:
+					conn.SetWriteDeadline(time.Now().Add(writeWait))
+					if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+						return
+					}
+				case <-done:
+					return
 				}
-				conn.WriteJSON(msg)
 			}
 		}()
 
 		for {
 			var msg WSMessage
 			if err := conn.ReadJSON(&msg); err != nil {
+				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+					log.Printf("WebSocket error from %s: %v", connID, err)
+				}
 				break
 			}
 			log.Printf("WS message from %s: type=%s", connID, msg.Type)
@@ -381,6 +429,7 @@ func handleWS(s *Store) http.HandlerFunc {
 				}
 			}
 		}
+		close(done)
 	}
 }
 

@@ -70,9 +70,9 @@ const indexHTML = `
         .history-list { padding: 12px; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
         .history-entry { background: #f8f9fa; border-radius: 6px; padding: 10px; font-size: 0.8rem; color: #4b4f56; border-left: 4px solid #7f8c8d; box-shadow: 0 1px 2px rgba(0,0,0,0.05); word-break: break-all; }
 
-        .add-card-form { display: flex; gap: 8px; }
+        .add-card-form { display: flex; gap: 8px; align-items: center; }
         .add-card-form input { padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; flex: 1; font-size: 0.9rem; }
-        .add-card-form button { padding: 8px 16px; background: #2ecc71; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: background 0.2s; }
+        .add-card-form button { padding: 8px 16px; background: #2ecc71; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: background 0.2s; height: 38px; box-sizing: border-box; }
         .add-card-form button:hover { background: #27ae60; }
 
         .presence-list { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
@@ -83,9 +83,8 @@ const indexHTML = `
         .clear-btn { background: #e74c3c; color: white; border: none; border-radius: 4px; padding: 4px 8px; font-size: 0.7rem; cursor: pointer; transition: background 0.2s; }
         .clear-btn:hover { background: #c0392b; }
 
-        .reset-btn { background: #ff0000; color: white; border: 4px solid #8b0000; border-radius: 8px; padding: 10px 20px; font-size: 1.2rem; font-weight: bold; cursor: pointer; text-transform: uppercase; box-shadow: 0 4px 0 #8b0000; transition: all 0.1s; margin-left: 20px; }
-        .reset-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 #8b0000; }
-        .reset-btn:hover { background: #ff3333; }
+        .reset-btn { background: #e74c3c; color: white; border: none; border-radius: 6px; padding: 0 16px; font-size: 0.8rem; font-weight: bold; cursor: pointer; text-transform: uppercase; transition: background 0.2s; height: 38px; box-sizing: border-box; margin-left: 10px; }
+        .reset-btn:hover { background: #c0392b; }
     </style>
 </head>
 <body>
@@ -95,12 +94,12 @@ const indexHTML = `
             Local: {{.LocalCount}} | Total: {{.TotalCount}}
             <span onclick="cleanupConnections()" style="cursor: pointer; margin-left: 10px; text-decoration: underline;" title="Force cleanup of stale nodes">🧹</span>
         </div>
-        <button onclick="resetBoard()" class="reset-btn">Reset Board</button>
         <div class="add-card-form">
-            <form action="/api/add" method="POST" style="display: flex; gap: 8px;">
+            <form action="/api/add" method="POST" style="display: flex; gap: 8px; align-items: center;">
                 <input type="text" name="title" placeholder="What needs to be done?" required>
                 <button type="submit">Add Task</button>
             </form>
+            <button onclick="resetBoard()" class="reset-btn">Reset Board</button>
         </div>
     </header>
     

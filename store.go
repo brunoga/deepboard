@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/brunoga/deep/v3/crdt"
 	"github.com/google/uuid"
@@ -22,6 +23,7 @@ type Store struct {
 	subs   map[chan WSMessage]bool
 	peers  []string
 	nodeID string
+	lastCount int
 }
 
 func NewStore(dbPath string, nodeID string, peers []string) (*Store, error) {
@@ -47,10 +49,11 @@ func NewStore(dbPath string, nodeID string, peers []string) (*Store, error) {
 	}
 
 	s := &Store{
-		db:     db,
-		subs:   make(map[chan WSMessage]bool),
-		peers:  peers,
-		nodeID: nodeID,
+		db:        db,
+		subs:      make(map[chan WSMessage]bool),
+		peers:     peers,
+		nodeID:    nodeID,
+		lastCount: -1,
 	}
 
 	// Load or initialize state
@@ -68,11 +71,22 @@ func NewStore(dbPath string, nodeID string, peers []string) (*Store, error) {
 		}
 	}
 
-	s.mu.Lock()
-	s.updateConnectionsLocked(0)
-	s.mu.Unlock()
+	go s.connectionManager()
 
 	return s, nil
+}
+
+func (s *Store) connectionManager() {
+	ticker := time.NewTicker(2 * time.Second)
+	for range ticker.C {
+		s.mu.Lock()
+		count := len(s.subs)
+		if count != s.lastCount {
+			s.lastCount = count
+			s.updateConnectionsLocked(count)
+		}
+		s.mu.Unlock()
+	}
 }
 
 func (s *Store) UpdatePeers(peers []string) {
@@ -242,13 +256,11 @@ func (s *Store) savePatch(delta crdt.Delta[BoardState]) {
 }
 
 func (s *Store) Subscribe() chan WSMessage {
-	ch := make(chan WSMessage, 10)
+	ch := make(chan WSMessage, 256)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.subs[ch] = true
-	count := len(s.subs)
-	s.updateConnectionsLocked(count)
 	return ch
 }
 
@@ -261,13 +273,12 @@ func (s *Store) Unsubscribe(ch chan WSMessage) {
 	}
 	delete(s.subs, ch)
 	close(ch)
-	count := len(s.subs)
-	s.updateConnectionsLocked(count)
 }
 
 func (s *Store) UpdateConnections(count int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.lastCount = count
 	s.updateConnectionsLocked(count)
 }
 

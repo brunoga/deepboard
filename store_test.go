@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brunoga/deep/v3/crdt"
 )
@@ -155,6 +156,8 @@ func TestStore_ConnectionTracking(t *testing.T) {
 	s2, c2 := setupTestStore(t, "conn2", "node-2")
 	defer c2()
 
+	time.Sleep(2100 * time.Millisecond) // Wait for initial background sync
+
 	// 1. Initially 1 node connection (the current node with 0 connections)
 	if len(s1.GetBoard().NodeConnections) != 1 {
 		t.Errorf("expected 1 node connection initially, got %d", len(s1.GetBoard().NodeConnections))
@@ -163,6 +166,8 @@ func TestStore_ConnectionTracking(t *testing.T) {
 	// 2. Node 1 subscribes (1 connection)
 	sub1 := s1.Subscribe()
 	defer s1.Unsubscribe(sub1)
+
+	time.Sleep(2100 * time.Millisecond) // Wait for background sync
 
 	state1 := s1.GetBoard()
 	if len(state1.NodeConnections) != 1 {
@@ -175,6 +180,8 @@ func TestStore_ConnectionTracking(t *testing.T) {
 	// 3. Node 2 subscribes (1 connection)
 	sub2 := s2.Subscribe()
 	defer s2.Unsubscribe(sub2)
+
+	time.Sleep(2100 * time.Millisecond) // Wait for background sync
 
 	// Sync Node 2 state to Node 1 via Merge (to simulate background sync)
 	s1.Merge(s2.crdt)
@@ -194,6 +201,7 @@ func TestStore_ConnectionTracking(t *testing.T) {
 
 	// 4. Node 1 unsubscribes
 	s1.Unsubscribe(sub1)
+	time.Sleep(2100 * time.Millisecond) // Wait for background sync
 	state1 = s1.GetBoard()
 	for _, nc := range state1.NodeConnections {
 		if nc.NodeID == "node-1" && nc.Count != 0 {
