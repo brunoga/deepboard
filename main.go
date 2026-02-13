@@ -624,12 +624,18 @@ const indexHTML = `
                 
                 // If nothing is being edited, just replace the whole board for 100% reliability
                 if (!activeId) {
-                    document.getElementById('board').innerHTML = temp.querySelector('#board').innerHTML;
+                    document.getElementById('board').innerHTML = html;
                     initSortable(); initTextareas();
                     return;
                 }
 
-                temp.querySelectorAll('.card-list').forEach(newList => {
+                const cardLists = temp.querySelectorAll('.card-list');
+                if (cardLists.length === 0) {
+                    console.error('No card lists found in /board response');
+                    return;
+                }
+
+                cardLists.forEach(newList => {
                     const oldList = document.getElementById(newList.id);
                     if (!oldList) return;
 
