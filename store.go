@@ -129,9 +129,9 @@ func (s *Store) ApplyDelta(delta crdt.Delta[BoardState]) error {
 		log.Printf("Applied delta from remote: %s", delta.Patch.Summary())
 		s.saveState()
 		s.savePatch(delta)
-		// Remote updates for cursors/connections are silent
+		// Remote updates for connections are silent
 		summary := delta.Patch.Summary()
-		silent := strings.Contains(summary, "Cursors") || strings.Contains(summary, "nodeConnections")
+		silent := strings.Contains(summary, "nodeConnections")
 		s.Broadcast(WSMessage{Type: "refresh", Silent: silent})
 	}
 	return nil
@@ -333,35 +333,6 @@ func (s *Store) updateConnectionsLocked(count int) {
 		s.Broadcast(WSMessage{Type: "refresh", Silent: true})
 		go s.syncToPeers(delta)
 	}
-}
-
-func (s *Store) removeCursor(id string) {
-	s.Edit(func(bs *BoardState) {
-		newCursors := []Cursor{}
-		for _, c := range bs.Cursors {
-			if c.ID != id {
-				newCursors = append(newCursors, c)
-			}
-		}
-		bs.Cursors = newCursors
-	})
-}
-
-func (s *Store) SetCursor(cursor Cursor) {
-	s.SilentEdit(func(bs *BoardState) {
-		found := false
-		for i, c := range bs.Cursors {
-			if c.ID == cursor.ID {
-				bs.Cursors[i].CardID = cursor.CardID
-				bs.Cursors[i].Pos = cursor.Pos
-				found = true
-				break
-			}
-		}
-		if !found {
-			bs.Cursors = append(bs.Cursors, cursor)
-		}
-	})
 }
 
 func (s *Store) AddCard(title string) string {

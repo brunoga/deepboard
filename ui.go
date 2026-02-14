@@ -1,27 +1,18 @@
 package main
 
 const boardHTML = `
-{{$cursors := .Cursors}}
 {{range .Columns}}
 <div class="column">
     <h3>{{.Title}}</h3>
     <div class="card-list" id="col-{{.ID}}" data-col-id="{{.ID}}">
         {{range .Cards}}
-        {{$cardID := .ID}}
-        <div class="card" data-id="{{.ID}}" onclick="sendCursor('{{.ID}}', 0, event)">
+        <div class="card" data-id="{{.ID}}">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                 <span class="card-title">{{.Title}}</span>
                 <button onclick="deleteCard('{{.ID}}')" class="delete-btn">&times;</button>
             </div>
             <textarea class="card-desc" id="desc-{{.ID}}" placeholder="Add a description..."
                       data-last-value="{{.Description.String}}">{{.Description.String}}</textarea>
-            <div class="presence-list">
-                {{range $cursors}}
-                    {{if eq .CardID $cardID}}
-                        <span class="presence-tag" title="User {{.ID}}">👤 {{slice .ID 0 4}}</span>
-                    {{end}}
-                {{end}}
-            </div>
         </div>
         {{end}}
     </div>
@@ -74,9 +65,6 @@ const indexHTML = `
         .add-card-form input { padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; flex: 1; font-size: 0.9rem; }
         .add-card-form button { padding: 8px 16px; background: #2ecc71; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: background 0.2s; height: 38px; box-sizing: border-box; }
         .add-card-form button:hover { background: #27ae60; }
-
-        .presence-list { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
-        .presence-tag { font-size: 0.7rem; background: #e0e0e0; padding: 2px 6px; border-radius: 4px; color: #666; }
 
         .sidebar-header { display: flex; justify-content: space-between; align-items: center; padding: 0 12px; background: #95a5a6; border-radius: 10px 10px 0 0; color: white; }
         .sidebar-header h3 { background: none !important; box-shadow: none !important; margin: 0; }
@@ -212,9 +200,8 @@ const indexHTML = `
                         if (!oldCard) {
                             oldList.appendChild(newCard.cloneNode(true));
                         } else {
-                            // Update title and presence
+                            // Update title
                             oldCard.querySelector('.card-title').innerText = newCard.querySelector('.card-title').innerText;
-                            oldCard.querySelector('.presence-list').innerHTML = newCard.querySelector('.presence-list').innerHTML;
                             
                             const oldTA = oldCard.querySelector('.card-desc');
                             const newTA = newCard.querySelector('.card-desc');
@@ -273,35 +260,12 @@ const indexHTML = `
             });
         }
 
-        let cursorTimeout;
-        function sendCursor(cardId, pos, event) {
-            if (event && (event.target.tagName === 'BUTTON' || event.target.tagName === 'TEXTAREA')) return;
-            if (cursorTimeout) return;
-            cursorTimeout = setTimeout(() => {
-                if (socket && socket.readyState === WebSocket.OPEN) {
-                    socket.send(JSON.stringify({
-                        type: 'cursor',
-                        cursor: { cardId: cardId, pos: pos }
-                    }));
-                }
-                cursorTimeout = null;
-            }, 200); // Throttle cursors to 5fps
-        }
-
         function initTextareas() {
             document.querySelectorAll('.card-desc').forEach(el => {
                 let inputTimeout;
-                const cardId = el.id.slice(5);
                 
-                const updateCursor = () => sendCursor(cardId, el.selectionStart);
-
-                el.onfocus = updateCursor;
-                el.onclick = (e) => { e.stopPropagation(); updateCursor(); };
-                el.onkeyup = updateCursor;
-
                 el.oninput = () => {
                     lastInputTime[el.id] = Date.now();
-                    sendCursor();
                     clearTimeout(inputTimeout);
                     inputTimeout = setTimeout(() => {
                         const old = el.dataset.lastValue || "", val = el.value;
@@ -325,3 +289,63 @@ const indexHTML = `
 </body>
 </html>
 `
+
+type UIColumn struct {
+	ID    string
+	Title string
+	Cards []Card
+}
+
+type UIData struct {
+	NodeID     string
+	Columns    []UIColumn
+	History    []string
+	LocalCount int
+	TotalCount int
+}
+
+func prepareUIData(s *Store) UIData {
+	state := s.GetBoard()
+	localCount, totalCount := getConnectionCounts(state, s.nodeID)
+
+	uiColumns := make([]UIColumn, len(state.Board.Columns))
+	colMap := make(map[string]int)
+
+	for i, col := range state.Board.Columns {
+		uiColumns[i] = UIColumn{
+			ID:    col.ID,
+			Title: col.Title,
+			Cards: []Card{},
+		}
+		colMap[col.ID] = i
+	}
+
+	for _, card := range state.Board.Cards {
+		if idx, ok := colMap[card.ColumnID]; ok {
+			uiColumns[idx].Cards = append(uiColumns[idx].Cards, card)
+		}
+	}
+
+	// Sort cards in each column by Order
+	for i := range uiColumns {
+		sortCards(uiColumns[i].Cards)
+	}
+
+	return UIData{
+		NodeID:     *nodeID,
+		Columns:    uiColumns,
+		History:    s.GetHistory(15),
+		LocalCount: localCount,
+		TotalCount: totalCount,
+	}
+}
+
+func sortCards(cards []Card) {
+	for i := 0; i < len(cards); i++ {
+		for j := i + 1; j < len(cards); j++ {
+			if cards[i].Order > cards[j].Order {
+				cards[i], cards[j] = cards[j], cards[i]
+			}
+		}
+	}
+}

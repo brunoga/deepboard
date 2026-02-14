@@ -277,68 +277,6 @@ func handleHistory(s *Store) http.HandlerFunc {
 	}
 }
 
-type UIColumn struct {
-	ID    string
-	Title string
-	Cards []Card
-}
-
-type UIData struct {
-	NodeID     string
-	Columns    []UIColumn
-	History    []string
-	LocalCount int
-	TotalCount int
-	Cursors    []Cursor
-}
-
-func prepareUIData(s *Store) UIData {
-	state := s.GetBoard()
-	localCount, totalCount := getConnectionCounts(state, s.nodeID)
-
-	uiColumns := make([]UIColumn, len(state.Board.Columns))
-	colMap := make(map[string]int)
-
-	for i, col := range state.Board.Columns {
-		uiColumns[i] = UIColumn{
-			ID:    col.ID,
-			Title: col.Title,
-			Cards: []Card{},
-		}
-		colMap[col.ID] = i
-	}
-
-	for _, card := range state.Board.Cards {
-		if idx, ok := colMap[card.ColumnID]; ok {
-			uiColumns[idx].Cards = append(uiColumns[idx].Cards, card)
-		}
-	}
-
-	// Sort cards in each column by Order
-	for i := range uiColumns {
-		sortCards(uiColumns[i].Cards)
-	}
-
-	return UIData{
-		NodeID:     *nodeID,
-		Columns:    uiColumns,
-		History:    s.GetHistory(15),
-		LocalCount: localCount,
-		TotalCount: totalCount,
-		Cursors:    state.Cursors,
-	}
-}
-
-func sortCards(cards []Card) {
-	for i := 0; i < len(cards); i++ {
-		for j := i + 1; j < len(cards); j++ {
-			if cards[i].Order > cards[j].Order {
-				cards[i], cards[j] = cards[j], cards[i]
-			}
-		}
-	}
-}
-
 func handleWS(s *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -356,7 +294,6 @@ func handleWS(s *Store) http.HandlerFunc {
 		})
 
 		connID := uuid.New().String()
-		defer s.removeCursor(connID)
 
 		sub := s.Subscribe()
 		defer s.Unsubscribe(sub)
@@ -420,12 +357,6 @@ func handleWS(s *Store) http.HandlerFunc {
 			case "delete":
 				if msg.Delete != nil {
 					s.DeleteCard(msg.Delete.CardID)
-				}
-			case "cursor":
-				if msg.Cursor != nil {
-					msg.Cursor.ID = connID
-					msg.Cursor.NodeID = *nodeID
-					s.SetCursor(*msg.Cursor)
 				}
 			case "heartbeat":
 				s.Heartbeat(sub)

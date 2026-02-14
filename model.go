@@ -19,13 +19,6 @@ type NodeConnection struct {
 	Count  int    `json:"count"`
 }
 
-type Cursor struct {
-	ID     string `deep:"key" json:"id"`
-	CardID string `json:"cardId"`
-	Pos    int    `json:"pos"`
-	NodeID string `json:"nodeId"`
-}
-
 type Column struct {
 	ID    string `deep:"key" json:"id"`
 	Title string `json:"title"`
@@ -42,7 +35,6 @@ type Board struct {
 type BoardState struct {
 	Board           Board            `json:"board"`
 	NodeConnections []NodeConnection `json:"nodeConnections"`
-	Cursors         []Cursor         `json:"cursors"`
 }
 
 type WSMessage struct {
@@ -51,7 +43,6 @@ type WSMessage struct {
 	Move   *MoveOp   `json:"move,omitempty"`
 	TextOp *TextOp   `json:"textOp,omitempty"`
 	Delete *DeleteOp `json:"delete,omitempty"`
-	Cursor *Cursor   `json:"cursor,omitempty"`
 }
 
 type MoveOp struct {
@@ -96,6 +87,5 @@ func NewInitialBoard() BoardState {
 			},
 		},
 		NodeConnections: []NodeConnection{},
-		Cursors:         []Cursor{},
 	}
 }

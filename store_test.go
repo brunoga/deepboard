@@ -201,9 +201,6 @@ func TestStore_ConnectionTracking(t *testing.T) {
 	}
 
 	// 5. Sync Node 2 back to Node 1
-	// We use a small sleep to ensure clocks are strictly increasing for the merge to be predictable
-	time.Sleep(10 * time.Millisecond)
-	s1.UpdateConnections(1) // Heartbeat to advance clock
 	s1.Merge(s2.crdt)
 	
 	state1 = s1.GetBoard()
