@@ -169,16 +169,11 @@ const indexHTML = `
                 const temp = document.createElement('div');
                 temp.innerHTML = html;
                 
-                // If nothing is being edited, just replace the whole board for 100% reliability
-                if (!activeId) {
-                    document.getElementById('board').innerHTML = html;
-                    initSortable(); initTextareas();
-                    return;
-                }
-
                 const cardLists = temp.querySelectorAll('.card-list');
                 if (cardLists.length === 0) {
                     console.error('No card lists found in /board response');
+                    // Fallback for reliability if partial update fails to find lists
+                    if (!activeId) document.getElementById('board').innerHTML = html;
                     return;
                 }
 
@@ -191,7 +186,9 @@ const indexHTML = `
 
                     // 1. Remove cards that are no longer present
                     oldList.querySelectorAll('.card').forEach(oldCard => {
-                        if (!newIds.has(oldCard.dataset.id)) oldCard.remove();
+                        if (!newIds.has(oldCard.dataset.id)) {
+                            oldCard.remove();
+                        }
                     });
 
                     // 2. Update existing or add new
