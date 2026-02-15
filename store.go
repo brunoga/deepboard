@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/brunoga/deep/v3/crdt"
+	"github.com/brunoga/deep/v3/crdt/hlc"
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 )
@@ -105,8 +106,13 @@ func (s *Store) connectionManager() {
 
 func (s *Store) UpdatePeers(peers []string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.peers = peers
+	s.mu.Unlock()
+
+	// Trigger immediate sync with new peers
+	for _, p := range peers {
+		go syncWithPeer(s, p)
+	}
 }
 
 func (s *Store) GetPeers() []string {
@@ -241,19 +247,33 @@ func (s *Store) GetHistoryAsDelta() crdt.Delta[BoardState] {
 }
 
 func (s *Store) Reset() {
+	// Perform a "Soft Reset" via Edit so that changes propagate as a Delta.
+	// Replacing the CRDT instance breaks synchronization (clocks reset).
+	s.Edit(func(bs *BoardState) {
+		// 1. Clear Cards
+		bs.Board.Cards = make(map[string]Card)
+		
+		// 2. Clear Connections (except self, maybe? Logic handles re-add)
+		bs.NodeConnections = []NodeConnection{}
+
+		// 3. Add initial sample data (matching NewInitialBoard)
+		id := "card-1"
+		bs.Board.Cards[id] = Card{
+			ID:       id,
+			Title:    "Try Deep Library",
+			ColumnID: "todo",
+			Order:    1000,
+			Description: crdt.Text{
+				{ID: hlc.HLC{NodeID: "system"}, Value: "Explore the features of the deep library."},
+			},
+		}
+	})
+	
+	// Force re-register connection
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Clear DB
-	s.db.Exec("DELETE FROM state")
-	s.db.Exec("DELETE FROM patches")
-
-	// Re-initialize CRDT
-	s.crdt = crdt.NewCRDT(NewInitialBoard(), s.nodeID)
-	s.saveState()
-
-	// Notify everyone
-	s.Broadcast(WSMessage{Type: "refresh"})
+	count := len(s.subs)
+	s.mu.Unlock()
+	s.UpdateConnections(count)
 }
 
 func (s *Store) saveState() {
@@ -389,7 +409,10 @@ func (s *Store) UpdateCardText(cardID, op, val string, pos, length int) {
 			return
 		}
 		if op == "insert" {
-			card.Description = card.Description.Insert(pos, val, s.crdt.Clock)
+			for i, char := range val {
+				// We use the CRDT's Edit context to ensure correct sequencing
+				card.Description = card.Description.Insert(pos+i, string(char), s.crdt.Clock)
+			}
 		} else if op == "delete" {
 			card.Description = card.Description.Delete(pos, length)
 		}

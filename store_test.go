@@ -150,6 +150,32 @@ func TestStore_TextSynchronization(t *testing.T) {
 	}
 }
 
+func TestStore_ServerSideTextSync(t *testing.T) {
+	s1, c1 := setupTestStore(t, "sync1", "node-1")
+	defer c1()
+	s2, c2 := setupTestStore(t, "sync2", "node-2")
+	defer c2()
+
+	cardID := "card-1"
+	
+	// Clear existing text
+	s1.UpdateCardText(cardID, "delete", "", 0, 1000)
+	s2.Merge(s1.crdt)
+
+	// 1. node-1 inserts "A"
+	s1.UpdateCardText(cardID, "insert", "A", 0, 0)
+	s2.Merge(s1.crdt)
+	
+	// 2. node-2 inserts "B" at pos 1
+	s2.UpdateCardText(cardID, "insert", "B", 1, 0)
+	s1.Merge(s2.crdt)
+	
+	res := s1.GetBoard().Board.Cards[cardID].Description.String()
+	if res != "AB" {
+		t.Errorf("Expected 'AB', got '%s'", res)
+	}
+}
+
 func TestStore_ConnectionTracking(t *testing.T) {
 	s1, c1 := setupTestStore(t, "conn1", "node-1")
 	defer c1()
@@ -360,5 +386,52 @@ func TestStore_ConcurrencyAndConvergence(t *testing.T) {
 	// The result should contain parts of both strings (CRDT merging)
 	if !strings.Contains(txt, "Node 2:") || !strings.Contains(txt, "from 1") {
 		t.Errorf("Merged text is missing edits: '%s'", txt)
+	}
+}
+
+func TestStore_ServerSideConcurrentEdits(t *testing.T) {
+	s1, c1 := setupTestStore(t, "crdt1", "node-1")
+	defer c1()
+	s2, c2 := setupTestStore(t, "crdt2", "node-2")
+	defer c2()
+
+	cardID := "card-1"
+	initialText := "Test CRDT conflicting edits"
+
+	// 1. Initialize both with base text
+	s1.UpdateCardText(cardID, "delete", "", 0, 1000) // Clear initial
+	s1.UpdateCardText(cardID, "insert", initialText, 0, 0)
+	s2.Merge(s1.crdt)
+
+	// Verify both have base text
+	if s1.GetBoard().Board.Cards[cardID].Description.String() != initialText {
+		t.Fatal("s1 failed to set initial text")
+	}
+	if s2.GetBoard().Board.Cards[cardID].Description.String() != initialText {
+		t.Fatal("s2 failed to merge initial text")
+	}
+
+	// 2. Concurrent edits
+	// User 1: Insert "USER1 " between "Test " and "CRDT" (pos 5)
+	s1.UpdateCardText(cardID, "insert", "USER1 ", 5, 0)
+
+	// User 2: Insert "USER2 " between "conflicting " and "edits" (pos 22)
+	s2.UpdateCardText(cardID, "insert", "USER2 ", 22, 0)
+
+	// 3. Merge BOTH ways
+	s1.Merge(s2.crdt)
+	s2.Merge(s1.crdt)
+
+	// 4. Verify convergence
+	res1 := s1.GetBoard().Board.Cards[cardID].Description.String()
+	res2 := s2.GetBoard().Board.Cards[cardID].Description.String()
+
+	if res1 != res2 {
+		t.Errorf("Nodes failed to converge!\ns1: '%s'\ns2: '%s'", res1, res2)
+	}
+
+	expected := "Test USER1 CRDT conflicting USER2 edits"
+	if res1 != expected {
+		t.Errorf("Converged to wrong string.\nGot: '%s'\nExp: '%s'", res1, expected)
 	}
 }

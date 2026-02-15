@@ -262,17 +262,44 @@ const indexHTML = `
                 let inputTimeout;
                 
                 el.oninput = () => {
+                    if (el.dataset.syncing) return;
+                    const old = el.dataset.lastValue || "";
+                    const val = el.value;
                     lastInputTime[el.id] = Date.now();
                     clearTimeout(inputTimeout);
                     inputTimeout = setTimeout(() => {
-                        const old = el.dataset.lastValue || "", val = el.value;
-                        let s = 0; while(s < old.length && s < val.length && old[s] === val[s]) s++;
-                        let oe = old.length-1, ne = val.length-1;
-                        while(oe >= s && ne >= s && old[oe] === val[ne]) { oe--; ne--; }
-                        if (oe >= s) socket.send(JSON.stringify({type:'textOp', textOp:{cardId:el.id.slice(5), op:'delete', pos:s, length:oe-s+1}}));
-                        if (ne >= s) socket.send(JSON.stringify({type:'textOp', textOp:{cardId:el.id.slice(5), op:'insert', pos:s, val:val.substring(s, ne+1)}}));
+                        if (val === old) return;
+
+                        let commonPrefix = 0;
+                        while (commonPrefix < old.length && commonPrefix < val.length && old[commonPrefix] === val[commonPrefix]) {
+                            commonPrefix++;
+                        }
+
+                        let commonSuffix = 0;
+                        while (commonSuffix < old.length - commonPrefix && commonSuffix < val.length - commonPrefix &&
+                               old[old.length - 1 - commonSuffix] === val[val.length - 1 - commonSuffix]) {
+                            commonSuffix++;
+                        }
+
+                        const delLen = old.length - commonPrefix - commonSuffix;
+                        const insStr = val.slice(commonPrefix, val.length - commonSuffix);
+
+                        if (delLen > 0) {
+                            socket.send(JSON.stringify({
+                                type: 'textOp',
+                                textOp: { cardId: el.id.slice(5), op: 'delete', pos: commonPrefix, length: delLen }
+                            }));
+                        }
+
+                        if (insStr.length > 0) {
+                            socket.send(JSON.stringify({
+                                type: 'textOp',
+                                textOp: { cardId: el.id.slice(5), op: 'insert', pos: commonPrefix, val: insStr }
+                            }));
+                        }
+
                         el.dataset.lastValue = val;
-                    }, 150); // Reduced to 150ms for better feel
+                    }, 250);
                 };
             });
         }

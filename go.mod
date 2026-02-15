@@ -3,7 +3,7 @@ module github.com/brunoga/deepboard
 go 1.25.0
 
 require (
-	github.com/brunoga/deep/v3 v3.0.0
+	github.com/brunoga/deep/v3 v3.1.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	modernc.org/sqlite v1.45.0
@@ -24,3 +24,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace github.com/brunoga/deep/v3 => ../deep
