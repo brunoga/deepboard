@@ -172,6 +172,32 @@ func TestIntegration_ConnectionCounts(t *testing.T) {
 	})
 }
 
+func TestIntegration_ConnectionCountDecrease(t *testing.T) {
+	env := setupIntegration(t)
+	defer env.teardown()
+
+	page1, page2 := setupPages(t, env)
+
+	// 1. Wait for both to connect
+	waitForCondition(t, "connection count to reach 2", func() bool {
+		stats, _ := page1.TextContent("#conn-counts")
+		return strings.Contains(stats, "Total: 2")
+	})
+
+	// 2. Close page 2
+	err := page2.Close()
+	if err != nil {
+		t.Fatalf("Failed to close page 2: %v", err)
+	}
+
+	// 3. Verify total count on page 1 decreases to 1
+	// Note: It should happen quickly because Unsubscribe is immediate.
+	waitForCondition(t, "connection count to decrease to 1", func() bool {
+		stats, _ := page1.TextContent("#conn-counts")
+		return strings.Contains(stats, "Total: 1")
+	})
+}
+
 func TestIntegration_AddCard(t *testing.T) {
 	env := setupIntegration(t)
 	defer env.teardown()
