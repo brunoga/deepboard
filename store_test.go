@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brunoga/deep/v3/crdt"
+	"github.com/brunoga/deep/v5/crdt"
 )
 
 func setupTestStore(t *testing.T, name string, nodeID string) (*Store, func()) {

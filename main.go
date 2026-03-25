@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/brunoga/deep/v3/crdt"
+	"github.com/brunoga/deep/v5/crdt"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -212,9 +212,8 @@ func handleSync(s *Store) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if delta.Patch == nil {
-			// Triggered broadcast from Merge
-			s.Broadcast(WSMessage{Type: "refresh"})
+		if delta.Timestamp.WallTime == 0 {
+			// Empty delta — nothing to apply
 			w.WriteHeader(http.StatusOK)
 			return
 		}

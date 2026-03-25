@@ -3,7 +3,7 @@ module github.com/brunoga/deepboard
 go 1.25.0
 
 require (
-	github.com/brunoga/deep/v3 v3.1.1
+	github.com/brunoga/deep/v5 v5.1.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/playwright-community/playwright-go v0.5200.1

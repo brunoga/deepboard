@@ -11,19 +11,19 @@ import (
 	"sync"
 	"time"
 
-	"github.com/brunoga/deep/v3/crdt"
-	"github.com/brunoga/deep/v3/crdt/hlc"
+	"github.com/brunoga/deep/v5/crdt"
+	"github.com/brunoga/deep/v5/crdt/hlc"
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 )
 
 type Store struct {
-	mu     sync.RWMutex
-	db     *sql.DB
-	crdt   *crdt.CRDT[BoardState]
-	subs   map[chan WSMessage]time.Time
-	peers  []string
-	nodeID string
+	mu        sync.RWMutex
+	db        *sql.DB
+	crdt      *crdt.CRDT[BoardState]
+	subs      map[chan WSMessage]time.Time
+	peers     []string
+	nodeID    string
 	lastCount int
 }
 
@@ -94,7 +94,7 @@ func (s *Store) connectionManager() {
 				changed = true
 			}
 		}
-		
+
 		count := len(s.subs)
 		if count != s.lastCount || changed {
 			s.lastCount = count
@@ -132,12 +132,13 @@ func (s *Store) ApplyDelta(delta crdt.Delta[BoardState]) error {
 	defer s.mu.Unlock()
 
 	if s.crdt.ApplyDelta(delta) {
-		log.Printf("Applied delta from remote: %s", delta.Patch.Summary())
+		data, _ := json.Marshal(delta)
+		summary := deltaSummary(data)
+		log.Printf("Applied delta from remote: %s", summary)
 		s.saveState()
-		s.savePatch(delta)
+		s.savePatchData(delta.Timestamp.String(), data, summary)
 		// Remote updates for connections are silent
-		summary := delta.Patch.Summary()
-		silent := strings.Contains(summary, "nodeConnections")
+		silent := isConnectionOnlyDelta(data)
 		s.Broadcast(WSMessage{Type: "refresh", Silent: silent})
 	}
 	return nil
@@ -148,9 +149,10 @@ func (s *Store) Edit(fn func(*BoardState)) crdt.Delta[BoardState] {
 	defer s.mu.Unlock()
 
 	delta := s.crdt.Edit(fn)
-	if delta.Patch != nil {
+	if delta.Timestamp.WallTime != 0 {
+		data, _ := json.Marshal(delta)
 		s.saveState()
-		s.savePatch(delta)
+		s.savePatchData(delta.Timestamp.String(), data, deltaSummary(data))
 		s.Broadcast(WSMessage{Type: "refresh"})
 		go s.syncToPeers(delta)
 	}
@@ -162,7 +164,7 @@ func (s *Store) SilentEdit(fn func(*BoardState)) {
 	defer s.mu.Unlock()
 
 	delta := s.crdt.Edit(fn)
-	if delta.Patch != nil {
+	if delta.Timestamp.WallTime != 0 {
 		s.saveState()
 		s.Broadcast(WSMessage{Type: "refresh", Silent: true})
 		go s.syncToPeers(delta)
@@ -234,25 +236,13 @@ func (s *Store) ClearHistory() {
 	s.Broadcast(WSMessage{Type: "refresh"})
 }
 
-func (s *Store) GetHistoryAsDelta() crdt.Delta[BoardState] {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	var data []byte
-	s.db.QueryRow("SELECT patch FROM patches ORDER BY id DESC LIMIT 1").Scan(&data)
-	
-	var delta crdt.Delta[BoardState]
-	json.Unmarshal(data, &delta)
-	return delta
-}
-
 func (s *Store) Reset() {
 	// Perform a "Soft Reset" via Edit so that changes propagate as a Delta.
 	// Replacing the CRDT instance breaks synchronization (clocks reset).
 	s.Edit(func(bs *BoardState) {
 		// 1. Clear Cards
 		bs.Board.Cards = make(map[string]Card)
-		
+
 		// 2. Clear Connections (except self, maybe? Logic handles re-add)
 		bs.NodeConnections = []NodeConnection{}
 
@@ -268,7 +258,7 @@ func (s *Store) Reset() {
 			},
 		}
 	})
-	
+
 	// Force re-register connection
 	s.mu.Lock()
 	count := len(s.subs)
@@ -281,12 +271,10 @@ func (s *Store) saveState() {
 	s.db.Exec("INSERT OR REPLACE INTO state (id, data) VALUES ('latest', ?)", data)
 }
 
-func (s *Store) savePatch(delta crdt.Delta[BoardState]) {
-	patchData, _ := json.Marshal(delta)
-	summary := delta.Patch.Summary()
+func (s *Store) savePatchData(timestamp string, patchData []byte, summary string) {
 	log.Printf("Saving patch: %s", summary)
 	s.db.Exec("INSERT INTO patches (timestamp, patch, summary) VALUES (?, ?, ?)",
-		delta.Timestamp.String(), patchData, summary)
+		timestamp, patchData, summary)
 }
 
 func (s *Store) Subscribe() chan WSMessage {
@@ -310,7 +298,7 @@ func (s *Store) Unsubscribe(ch chan WSMessage) {
 	}
 	delete(s.subs, ch)
 	close(ch)
-	
+
 	count := len(s.subs)
 	s.lastCount = count
 	s.updateConnectionsLocked(count)
@@ -348,7 +336,7 @@ func (s *Store) updateConnectionsLocked(count int) {
 			})
 		}
 	})
-	if delta.Patch != nil {
+	if delta.Timestamp.WallTime != 0 {
 		s.saveState()
 		s.Broadcast(WSMessage{Type: "refresh", Silent: true})
 		go s.syncToPeers(delta)
@@ -409,10 +397,7 @@ func (s *Store) UpdateCardText(cardID, op, val string, pos, length int) {
 			return
 		}
 		if op == "insert" {
-			for i, char := range val {
-				// We use the CRDT's Edit context to ensure correct sequencing
-				card.Description = card.Description.Insert(pos+i, string(char), s.crdt.Clock)
-			}
+			card.Description = card.Description.Insert(pos, val, s.crdt.Clock())
 		} else if op == "delete" {
 			card.Description = card.Description.Delete(pos, length)
 		}
@@ -424,15 +409,6 @@ func (s *Store) DeleteCard(cardID string) {
 	s.Edit(func(bs *BoardState) {
 		delete(bs.Board.Cards, cardID)
 	})
-}
-
-func (s *Store) findCardLocked(bs *BoardState, cardID string) (*Card, int, int) {
-	// Deprecated but keeping for compatibility if needed elsewhere
-	card, ok := bs.Board.Cards[cardID]
-	if !ok {
-		return nil, -1, -1
-	}
-	return &card, -1, -1
 }
 
 func (s *Store) Broadcast(msg WSMessage) {
@@ -447,4 +423,49 @@ func (s *Store) Broadcast(msg WSMessage) {
 		default:
 		}
 	}
+}
+
+// deltaSummary extracts a human-readable summary from a marshaled Delta.
+// It reads the operation paths from the JSON representation.
+func deltaSummary(data []byte) string {
+	var m struct {
+		P struct {
+			Ops []struct {
+				P string `json:"p"`
+			} `json:"ops"`
+		} `json:"p"`
+	}
+	if err := json.Unmarshal(data, &m); err != nil || len(m.P.Ops) == 0 {
+		return "unknown change"
+	}
+	seen := make(map[string]bool, len(m.P.Ops))
+	paths := make([]string, 0, len(m.P.Ops))
+	for _, op := range m.P.Ops {
+		if !seen[op.P] {
+			seen[op.P] = true
+			paths = append(paths, op.P)
+		}
+	}
+	return strings.Join(paths, ", ")
+}
+
+// isConnectionOnlyDelta returns true when every operation in the delta targets
+// the nodeConnections slice, so callers can suppress noisy UI refreshes.
+func isConnectionOnlyDelta(data []byte) bool {
+	var m struct {
+		P struct {
+			Ops []struct {
+				P string `json:"p"`
+			} `json:"ops"`
+		} `json:"p"`
+	}
+	if err := json.Unmarshal(data, &m); err != nil || len(m.P.Ops) == 0 {
+		return false
+	}
+	for _, op := range m.P.Ops {
+		if !strings.HasPrefix(op.P, "/nodeConnections") {
+			return false
+		}
+	}
+	return true
 }

@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/brunoga/deep/v3/crdt"
-	"github.com/brunoga/deep/v3/crdt/hlc"
+	"github.com/brunoga/deep/v5/crdt"
+	"github.com/brunoga/deep/v5/crdt/hlc"
 )
 
 type Card struct {

@@ -1,5 +1,5 @@
-github.com/brunoga/deep/v3 v3.1.1 h1:PTtyKtXjkY+xAFV5YPCf735SNuwuu0/wC1KHWXl1mD4=
-github.com/brunoga/deep/v3 v3.1.1/go.mod h1:b8HFX8aUp2+ytkbPaN1leNjdUzjyhaTUY3Ag3enZLC8=
+github.com/brunoga/deep/v5 v5.1.0 h1:EmmXlnA+QRCsWVJOWHphFbrPIG2YuKsEOGpyxVU2zXM=
+github.com/brunoga/deep/v5 v5.1.0/go.mod h1:O/fROyWcafbR5fy3TdRZUW6oH5wBP3vJYLCXmXcgltk=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
