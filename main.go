@@ -238,6 +238,7 @@ func handleIndex(s *Store) http.HandlerFunc {
 
 func handleStats(s *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		state := s.GetBoard()
 		localCount, totalCount := getConnectionCounts(state, s.nodeID)
 		fmt.Fprintf(w, "Local: %d | Total: %d", localCount, totalCount)
@@ -258,6 +259,7 @@ func getConnectionCounts(state BoardState, nodeID string) (int, int) {
 
 func handleBoard(s *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		tmpl, err := template.New("board").Parse(boardHTML)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -269,6 +271,7 @@ func handleBoard(s *Store) http.HandlerFunc {
 
 func handleHistory(s *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		history := s.GetHistory(15)
 		for _, h := range history {
 			fmt.Fprintf(w, "<div class=\"history-entry\">%s</div>", h)

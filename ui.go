@@ -114,14 +114,14 @@ const indexHTML = `
         let heartbeatInterval;
 
         function updateStats() {
-            fetch('/stats').then(r => r.text()).then(text => {
+            fetch('/stats?t=' + Date.now()).then(r => r.text()).then(text => {
                 const countsEl = document.getElementById('conn-counts');
                 if (countsEl) countsEl.innerHTML = text;
             });
         }
 
         function updateHistory() {
-            fetch('/history').then(r => r.text()).then(html => {
+            fetch('/history?t=' + Date.now()).then(r => r.text()).then(html => {
                 const historyEl = document.getElementById('history');
                 if (historyEl) historyEl.innerHTML = html;
             });
@@ -131,6 +131,7 @@ const indexHTML = `
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             socket = new WebSocket(protocol + '//' + window.location.host + '/ws');
             socket.onopen = () => {
+                console.log('WebSocket connected');
                 refreshUI();
                 heartbeatInterval = setInterval(() => {
                     if (socket.readyState === WebSocket.OPEN) {
@@ -149,23 +150,27 @@ const indexHTML = `
                 }
             };
             socket.onclose = () => {
+                console.log('WebSocket closed, reconnecting...');
                 clearInterval(heartbeatInterval);
                 setTimeout(connect, 1000);
             };
+            socket.onerror = (err) => {
+                console.error('WebSocket error:', err);
+            };
         }
 
-        const lastInputTime = {};
         let refreshTimeout;
 
         function refreshUI() {
-            console.log('Refreshing UI...');
             // Update History & Stats
             updateHistory();
             updateStats();
             
-            const activeId = document.activeElement && document.activeElement.classList.contains('card-desc') ? document.activeElement.id : null;
-
-            fetch('/board').then(r => r.text()).then(html => {
+            fetch('/board?t=' + Date.now()).then(r => {
+                if (!r.ok) throw new Error('Network response was not ok');
+                return r.text();
+            }).then(html => {
+                const activeId = document.activeElement && document.activeElement.classList.contains('card-desc') ? document.activeElement.id : null;
                 const temp = document.createElement('div');
                 temp.innerHTML = html;
                 
@@ -187,6 +192,7 @@ const indexHTML = `
                     // 1. Remove cards that are no longer present
                     oldList.querySelectorAll('.card').forEach(oldCard => {
                         if (!newIds.has(oldCard.dataset.id)) {
+                            console.log('Removing card:', oldCard.dataset.id);
                             oldCard.remove();
                         }
                     });
@@ -195,50 +201,78 @@ const indexHTML = `
                     newCards.forEach(newCard => {
                         const oldCard = oldList.querySelector('[data-id="' + newCard.dataset.id + '"]');
                         if (!oldCard) {
+                            console.log('Adding new card:', newCard.dataset.id);
                             oldList.appendChild(newCard.cloneNode(true));
                         } else {
                             // Update title
-                            oldCard.querySelector('.card-title').innerText = newCard.querySelector('.card-title').innerText;
+                            const oldTitle = oldCard.querySelector('.card-title');
+                            const newTitle = newCard.querySelector('.card-title');
+                            if (oldTitle && newTitle && oldTitle.innerText !== newTitle.innerText) {
+                                oldTitle.innerText = newTitle.innerText;
+                            }
                             
                             const oldTA = oldCard.querySelector('.card-desc');
                             const newTA = newCard.querySelector('.card-desc');
-                            const now = Date.now(), lastTyped = lastInputTime[oldTA.id] || 0;
-                            
-                            if (oldTA.id === activeId || (now - lastTyped < 1000)) {
-                                // Keep local text, but schedule a catch-up
-                                clearTimeout(refreshTimeout);
-                                refreshTimeout = setTimeout(refreshUI, 1100);
-                            } else if (oldTA.value !== newTA.value) {
-                                oldTA.value = newTA.value;
-                                oldTA.dataset.lastValue = newTA.value;
+
+                            if (oldTA && newTA) {
+                                if (oldTA.id === activeId) {
+                                    if (oldTA.value !== newTA.value && !oldTA._pendingOp) {
+                                        // Try to merge remote change while focused if no local pending op
+                                        const start = oldTA.selectionStart;
+                                        const end = oldTA.selectionEnd;
+                                        oldTA.value = newTA.value;
+                                        oldTA.dataset.lastValue = newTA.value;
+                                        oldTA.setSelectionRange(start, end);
+                                    } else {
+                                        // Even if we skip el.value update, we should update lastValue
+                                        // so that the next local edit is calculated against the current server state.
+                                        // BUT only if we don't have a pending local op!
+                                        if (!oldTA._pendingOp) {
+                                            oldTA.dataset.lastValue = newTA.value;
+                                        }
+                                        clearTimeout(refreshTimeout);
+                                        refreshTimeout = setTimeout(refreshUI, 1100);
+                                    }
+                                } else if (oldTA._pendingOp) {
+                                    // Debounce in flight — wait for it.
+                                } else if (oldTA.value !== newTA.value) {
+                                    oldTA.value = newTA.value;
+                                    oldTA.dataset.lastValue = newTA.value;
+                                }
                             }
                         }
                     });
                 });
 
                 initSortable(); initTextareas();
+            }).catch(err => {
+                console.error('Failed to refresh UI:', err);
             });
         }
 
         function deleteCard(cardId) {
             if (confirm('Delete this card?')) {
-                socket.send(JSON.stringify({type: 'delete', delete: {cardId}}));
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({type: 'delete', delete: {cardId}}));
+                } else {
+                    console.error('WebSocket not open, cannot delete card');
+                }
             }
         }
 
         function clearHistory() {
             if (confirm('Clear activity history?')) {
-                fetch('/api/history/clear').then(() => refreshUI());
+                fetch('/api/history/clear?t=' + Date.now()).then(() => refreshUI());
             }
         }
 
         function cleanupConnections() {
-            fetch('/api/connections/cleanup').then(() => refreshUI());
+            fetch('/api/connections/cleanup?t=' + Date.now()).then(() => refreshUI());
         }
 
         function resetBoard() {
             if (confirm('DANGER: This will wipe EVERYTHING and reset the board for all users. Are you absolutely sure?')) {
-                fetch('/api/admin/reset').then(() => refreshUI());
+                fetch('/api/admin/reset?t=' + Date.now()).then(() => refreshUI());
             }
         }
 
@@ -251,7 +285,12 @@ const indexHTML = `
                     const toColId = e.to.dataset.colId;
                     const toIndex = e.newIndex;
                     if (fromColId !== toColId || e.oldIndex !== toIndex) {
-                        socket.send(JSON.stringify({type:'move', move:{cardId, from:fromColId, to:toColId, toIndex}}));
+                        if (socket && socket.readyState === WebSocket.OPEN) {
+                            socket.send(JSON.stringify({type:'move', move:{cardId, from:fromColId, to:toColId, toIndex}}));
+                        } else {
+                            console.error('WebSocket not open, cannot move card');
+                            refreshUI(); // Revert UI if possible
+                        }
                     }
                 }});
             });
@@ -259,16 +298,28 @@ const indexHTML = `
 
         function initTextareas() {
             document.querySelectorAll('.card-desc').forEach(el => {
-                let inputTimeout;
-                
+                // Skip elements that already have a handler registered.
+                // Each call to initTextareas() (including from refreshUI) must not
+                // create a second closure for an existing element: the old closure's
+                // debounce timer would still fire with a stale baseline, causing it
+                // to send an overlapping insert alongside the new timer → duplicates.
+                if (el._inputHandlerInit) return;
+                el._inputHandlerInit = true;
+
                 el.oninput = () => {
                     if (el.dataset.syncing) return;
                     const old = el.dataset.lastValue || "";
                     const val = el.value;
-                    lastInputTime[el.id] = Date.now();
-                    clearTimeout(inputTimeout);
-                    inputTimeout = setTimeout(() => {
-                        if (val === old) return;
+                    el._pendingOp = true;
+                    clearTimeout(el._inputTimeout);
+                    el._inputTimeout = setTimeout(() => {
+                        el._pendingOp = false;
+                        if (val === old) {
+                            // Typed and erased back — nothing to send, but we may
+                            // have skipped a server update; fetch the latest now.
+                            refreshUI();
+                            return;
+                        }
 
                         let commonPrefix = 0;
                         while (commonPrefix < old.length && commonPrefix < val.length && old[commonPrefix] === val[commonPrefix]) {
@@ -285,17 +336,21 @@ const indexHTML = `
                         const insStr = val.slice(commonPrefix, val.length - commonSuffix);
 
                         if (delLen > 0) {
-                            socket.send(JSON.stringify({
-                                type: 'textOp',
-                                textOp: { cardId: el.id.slice(5), op: 'delete', pos: commonPrefix, length: delLen }
-                            }));
+                            if (socket && socket.readyState === WebSocket.OPEN) {
+                                socket.send(JSON.stringify({
+                                    type: 'textOp',
+                                    textOp: { cardId: el.id.slice(5), op: 'delete', pos: commonPrefix, length: delLen }
+                                }));
+                            }
                         }
 
                         if (insStr.length > 0) {
-                            socket.send(JSON.stringify({
-                                type: 'textOp',
-                                textOp: { cardId: el.id.slice(5), op: 'insert', pos: commonPrefix, val: insStr }
-                            }));
+                            if (socket && socket.readyState === WebSocket.OPEN) {
+                                socket.send(JSON.stringify({
+                                    type: 'textOp',
+                                    textOp: { cardId: el.id.slice(5), op: 'insert', pos: commonPrefix, val: insStr }
+                                }));
+                            }
                         }
 
                         el.dataset.lastValue = val;
