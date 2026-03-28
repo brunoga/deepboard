@@ -9,7 +9,6 @@ type Card struct {
 	ID          string    `deep:"key" json:"id"`
 	Title       string    `json:"title"`
 	Description crdt.Text `json:"description"`
-	Assignee    string    `json:"assignee"`
 	ColumnID    string    `json:"columnID"`
 	Order       float64   `json:"order"`
 }

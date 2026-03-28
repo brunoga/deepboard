@@ -114,14 +114,14 @@ const indexHTML = `
         let heartbeatInterval;
 
         function updateStats() {
-            fetch('/stats?t=' + Date.now()).then(r => r.text()).then(text => {
+            fetch('/stats').then(r => r.text()).then(text => {
                 const countsEl = document.getElementById('conn-counts');
                 if (countsEl) countsEl.innerHTML = text;
             });
         }
 
         function updateHistory() {
-            fetch('/history?t=' + Date.now()).then(r => r.text()).then(html => {
+            fetch('/history').then(r => r.text()).then(html => {
                 const historyEl = document.getElementById('history');
                 if (historyEl) historyEl.innerHTML = html;
             });
@@ -166,7 +166,7 @@ const indexHTML = `
             updateHistory();
             updateStats();
             
-            fetch('/board?t=' + Date.now()).then(r => {
+            fetch('/board').then(r => {
                 if (!r.ok) throw new Error('Network response was not ok');
                 return r.text();
             }).then(html => {
@@ -192,7 +192,6 @@ const indexHTML = `
                     // 1. Remove cards that are no longer present
                     oldList.querySelectorAll('.card').forEach(oldCard => {
                         if (!newIds.has(oldCard.dataset.id)) {
-                            console.log('Removing card:', oldCard.dataset.id);
                             oldCard.remove();
                         }
                     });
@@ -201,7 +200,6 @@ const indexHTML = `
                     newCards.forEach(newCard => {
                         const oldCard = oldList.querySelector('[data-id="' + newCard.dataset.id + '"]');
                         if (!oldCard) {
-                            console.log('Adding new card:', newCard.dataset.id);
                             oldList.appendChild(newCard.cloneNode(true));
                         } else {
                             // Update title
@@ -262,17 +260,17 @@ const indexHTML = `
 
         function clearHistory() {
             if (confirm('Clear activity history?')) {
-                fetch('/api/history/clear?t=' + Date.now()).then(() => refreshUI());
+                fetch('/api/history/clear').then(() => refreshUI());
             }
         }
 
         function cleanupConnections() {
-            fetch('/api/connections/cleanup?t=' + Date.now()).then(() => refreshUI());
+            fetch('/api/connections/cleanup').then(() => refreshUI());
         }
 
         function resetBoard() {
             if (confirm('DANGER: This will wipe EVERYTHING and reset the board for all users. Are you absolutely sure?')) {
-                fetch('/api/admin/reset?t=' + Date.now()).then(() => refreshUI());
+                fetch('/api/admin/reset').then(() => refreshUI());
             }
         }
 
@@ -383,10 +381,7 @@ type UIData struct {
 	TotalCount int
 }
 
-func prepareUIData(s *Store) UIData {
-	state := s.GetBoard()
-	localCount, totalCount := getConnectionCounts(state, s.nodeID)
-
+func buildUIColumns(state BoardState) []UIColumn {
 	uiColumns := make([]UIColumn, len(state.Board.Columns))
 	colMap := make(map[string]int)
 
@@ -405,14 +400,19 @@ func prepareUIData(s *Store) UIData {
 		}
 	}
 
-	// Sort cards in each column by Order
 	for i := range uiColumns {
 		sortCards(uiColumns[i].Cards)
 	}
 
+	return uiColumns
+}
+
+func prepareUIData(s *Store) UIData {
+	state := s.GetBoard()
+	localCount, totalCount := getConnectionCounts(state, s.nodeID)
 	return UIData{
-		NodeID:     *nodeID,
-		Columns:    uiColumns,
+		NodeID:     s.nodeID,
+		Columns:    buildUIColumns(state),
 		History:    s.GetHistory(15),
 		LocalCount: localCount,
 		TotalCount: totalCount,

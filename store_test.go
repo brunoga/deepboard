@@ -293,7 +293,7 @@ func TestStore_CardOperations(t *testing.T) {
 	}
 
 	// 2. Move Card (TODO -> In Progress)
-	s.MoveCard(cardID, "todo", "in-progress", 0)
+	s.MoveCard(cardID, "in-progress", 0)
 	board = s.GetBoard()
 	card := board.Board.Cards[cardID]
 	if card.ColumnID != "in-progress" {
@@ -351,7 +351,7 @@ func TestStore_ConcurrencyAndConvergence(t *testing.T) {
 	s2.UpdateCardText(cardID, "insert", "Node 2: ", 0, 0)
 
 	// Node 3: Moves the card to "Done"
-	s3.MoveCard(cardID, "todo", "done", 0)
+	s3.MoveCard(cardID, "done", 0)
 
 	// 3. Full Mesh Sync using Merge (which preserves history)
 	s1.Merge(s2.crdt)

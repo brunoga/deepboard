@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -124,6 +123,8 @@ func (s *Store) GetPeers() []string {
 }
 
 func (s *Store) GetBoard() BoardState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.crdt.View()
 }
 
@@ -133,13 +134,13 @@ func (s *Store) ApplyDelta(delta crdt.Delta[BoardState]) error {
 
 	if s.crdt.ApplyDelta(delta) {
 		data, _ := json.Marshal(delta)
-		summary := deltaSummary(data)
+		paths := parseDeltaPaths(data)
+		summary := deltaSummary(paths)
 		log.Printf("Applied delta from remote: %s", summary)
 		s.saveState()
 		s.savePatchData(delta.Timestamp.String(), data, summary)
 		// Remote updates for connections are silent
-		silent := isConnectionOnlyDelta(data)
-		s.Broadcast(WSMessage{Type: "refresh", Silent: silent})
+		s.Broadcast(WSMessage{Type: "refresh", Silent: isConnectionOnlyDelta(paths)})
 	}
 	return nil
 }
@@ -152,7 +153,7 @@ func (s *Store) Edit(fn func(*BoardState)) crdt.Delta[BoardState] {
 	if delta.Timestamp.WallTime != 0 {
 		data, _ := json.Marshal(delta)
 		s.saveState()
-		s.savePatchData(delta.Timestamp.String(), data, deltaSummary(data))
+		s.savePatchData(delta.Timestamp.String(), data, deltaSummary(parseDeltaPaths(data)))
 		s.Broadcast(WSMessage{Type: "refresh"})
 		go s.syncToPeers(delta)
 	}
@@ -186,7 +187,7 @@ func (s *Store) syncToPeers(delta crdt.Delta[BoardState]) {
 	for _, peer := range currentPeers {
 		go func(p string) {
 			url := fmt.Sprintf("http://%s/api/sync", p)
-			resp, err := http.Post(url, "application/json", bytes.NewReader(data))
+			resp, err := peerHTTPClient.Post(url, "application/json", bytes.NewReader(data))
 			if err != nil {
 				log.Printf("Failed to sync with peer %s: %v", p, err)
 				return
@@ -367,25 +368,37 @@ func (s *Store) AddCard(title string) string {
 	return id
 }
 
-func (s *Store) MoveCard(cardID, fromCol, toCol string, toIndex int) {
+func (s *Store) MoveCard(cardID, toCol string, toIndex int) {
 	s.Edit(func(bs *BoardState) {
 		card, ok := bs.Board.Cards[cardID]
 		if !ok {
 			return
 		}
 
-		// Calculate new order
-		// Simplified: just put it at the end for now, or between neighbors if we had them.
-		// For a real production app, we'd use Fractional Indexing.
-		maxOrder := 0.0
+		// Collect and sort the other cards in the target column.
+		var colCards []Card
 		for _, c := range bs.Board.Cards {
-			if c.ColumnID == toCol && c.Order > maxOrder {
-				maxOrder = c.Order
+			if c.ColumnID == toCol && c.ID != cardID {
+				colCards = append(colCards, c)
 			}
+		}
+		sortCards(colCards)
+
+		// Compute new order using fractional indexing.
+		var newOrder float64
+		switch {
+		case len(colCards) == 0:
+			newOrder = 1000
+		case toIndex <= 0:
+			newOrder = colCards[0].Order - 1000
+		case toIndex >= len(colCards):
+			newOrder = colCards[len(colCards)-1].Order + 1000
+		default:
+			newOrder = (colCards[toIndex-1].Order + colCards[toIndex].Order) / 2
 		}
 
 		card.ColumnID = toCol
-		card.Order = maxOrder + 1000
+		card.Order = newOrder
 		bs.Board.Cards[cardID] = card
 	})
 }
@@ -425,9 +438,8 @@ func (s *Store) Broadcast(msg WSMessage) {
 	}
 }
 
-// deltaSummary extracts a human-readable summary from a marshaled Delta.
-// It reads the operation paths from the JSON representation.
-func deltaSummary(data []byte) string {
+// parseDeltaPaths extracts the operation paths from a marshaled Delta.
+func parseDeltaPaths(data []byte) []string {
 	var m struct {
 		P struct {
 			Ops []struct {
@@ -435,35 +447,40 @@ func deltaSummary(data []byte) string {
 			} `json:"ops"`
 		} `json:"p"`
 	}
-	if err := json.Unmarshal(data, &m); err != nil || len(m.P.Ops) == 0 {
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil
+	}
+	paths := make([]string, len(m.P.Ops))
+	for i, op := range m.P.Ops {
+		paths[i] = op.P
+	}
+	return paths
+}
+
+// deltaSummary returns a human-readable summary of the changed paths.
+func deltaSummary(paths []string) string {
+	if len(paths) == 0 {
 		return "unknown change"
 	}
-	seen := make(map[string]bool, len(m.P.Ops))
-	paths := make([]string, 0, len(m.P.Ops))
-	for _, op := range m.P.Ops {
-		if !seen[op.P] {
-			seen[op.P] = true
-			paths = append(paths, op.P)
+	seen := make(map[string]bool, len(paths))
+	unique := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if !seen[p] {
+			seen[p] = true
+			unique = append(unique, p)
 		}
 	}
-	return strings.Join(paths, ", ")
+	return strings.Join(unique, ", ")
 }
 
 // isConnectionOnlyDelta returns true when every operation in the delta targets
 // the nodeConnections slice, so callers can suppress noisy UI refreshes.
-func isConnectionOnlyDelta(data []byte) bool {
-	var m struct {
-		P struct {
-			Ops []struct {
-				P string `json:"p"`
-			} `json:"ops"`
-		} `json:"p"`
-	}
-	if err := json.Unmarshal(data, &m); err != nil || len(m.P.Ops) == 0 {
+func isConnectionOnlyDelta(paths []string) bool {
+	if len(paths) == 0 {
 		return false
 	}
-	for _, op := range m.P.Ops {
-		if !strings.HasPrefix(op.P, "/nodeConnections") {
+	for _, p := range paths {
+		if !strings.HasPrefix(p, "/nodeConnections") {
 			return false
 		}
 	}

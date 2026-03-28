@@ -29,6 +29,8 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
+var peerHTTPClient = &http.Client{Timeout: 5 * time.Second}
+
 const (
 	// Time allowed to write a message to the peer.
 	writeWait = 10 * time.Second
@@ -93,24 +95,27 @@ func main() {
 func startConnectionCleanup(s *Store) {
 	ticker := time.NewTicker(1 * time.Minute)
 	for range ticker.C {
-		currentPeers := s.GetPeers()
-		peerMap := make(map[string]bool)
-		for _, p := range currentPeers {
-			host := strings.Split(p, ":")[0]
-			peerMap[host] = true
-		}
-		peerMap[*nodeID] = true
-
-		s.SilentEdit(func(bs *BoardState) {
-			newConns := []NodeConnection{}
-			for _, nc := range bs.NodeConnections {
-				if peerMap[nc.NodeID] {
-					newConns = append(newConns, nc)
-				}
-			}
-			bs.NodeConnections = newConns
-		})
+		removeStaleConnections(s)
 	}
+}
+
+func removeStaleConnections(s *Store) {
+	currentPeers := s.GetPeers()
+	peerMap := make(map[string]bool)
+	for _, p := range currentPeers {
+		peerMap[strings.Split(p, ":")[0]] = true
+	}
+	peerMap[s.nodeID] = true
+
+	s.SilentEdit(func(bs *BoardState) {
+		newConns := []NodeConnection{}
+		for _, nc := range bs.NodeConnections {
+			if peerMap[nc.NodeID] {
+				newConns = append(newConns, nc)
+			}
+		}
+		bs.NodeConnections = newConns
+	})
 }
 
 func handleClearHistory(s *Store) http.HandlerFunc {
@@ -122,23 +127,7 @@ func handleClearHistory(s *Store) http.HandlerFunc {
 
 func handleCleanupConnections(s *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		currentPeers := s.GetPeers()
-		peerMap := make(map[string]bool)
-		for _, p := range currentPeers {
-			host := strings.Split(p, ":")[0]
-			peerMap[host] = true
-		}
-		peerMap[*nodeID] = true
-
-		s.SilentEdit(func(bs *BoardState) {
-			newConns := []NodeConnection{}
-			for _, nc := range bs.NodeConnections {
-				if peerMap[nc.NodeID] {
-					newConns = append(newConns, nc)
-				}
-			}
-			bs.NodeConnections = newConns
-		})
+		removeStaleConnections(s)
 		w.WriteHeader(http.StatusOK)
 	}
 }
@@ -191,7 +180,7 @@ func startBackgroundSync(s *Store) {
 
 func syncWithPeer(s *Store, peer string) {
 	url := fmt.Sprintf("http://%s/api/state", peer)
-	resp, err := http.Get(url)
+	resp, err := peerHTTPClient.Get(url)
 	if err != nil {
 		return
 	}
@@ -265,7 +254,7 @@ func handleBoard(s *Store) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		tmpl.Execute(w, prepareUIData(s))
+		tmpl.Execute(w, UIData{Columns: buildUIColumns(s.GetBoard())})
 	}
 }
 
@@ -350,7 +339,7 @@ func handleWS(s *Store) http.HandlerFunc {
 			switch msg.Type {
 			case "move":
 				if msg.Move != nil {
-					s.MoveCard(msg.Move.CardID, msg.Move.FromCol, msg.Move.ToCol, msg.Move.ToIndex)
+					s.MoveCard(msg.Move.CardID, msg.Move.ToCol, msg.Move.ToIndex)
 				}
 			case "textOp":
 				if msg.TextOp != nil {

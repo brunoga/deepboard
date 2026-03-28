@@ -15,6 +15,7 @@ import (
 )
 
 type Backend struct {
+	ID           string // stable opaque identifier, never changes or reuses
 	URL          *url.URL
 	ReverseProxy *httputil.ReverseProxy
 	Alive        bool
@@ -46,6 +47,21 @@ func (s *ServerPool) AddBackend(backend *Backend) {
 	s.backends = append(s.backends, backend)
 }
 
+// RemoveBackendsNotIn removes backends whose URL is not in the provided set.
+func (s *ServerPool) RemoveBackendsNotIn(activeURLs map[string]bool) {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	kept := s.backends[:0]
+	for _, b := range s.backends {
+		if activeURLs[b.URL.String()] {
+			kept = append(kept, b)
+		} else {
+			log.Printf("Removing stale backend: %s", b.URL)
+		}
+	}
+	s.backends = kept
+}
+
 func (s *ServerPool) NextIndex() int {
 	return int(atomic.AddUint64(&s.current, uint64(1)) % uint64(len(s.backends)))
 }
@@ -65,6 +81,19 @@ func (s *ServerPool) GetNextValidBackend() *Backend {
 	return nil
 }
 
+// GetBackendByID looks up a backend by its stable opaque ID.
+func (s *ServerPool) GetBackendByID(id string) *Backend {
+	s.mux.RLock()
+	defer s.mux.RUnlock()
+	for _, b := range s.backends {
+		if b.ID == id {
+			return b
+		}
+	}
+	return nil
+}
+
+// GetBackendByURL looks up a backend by its full URL string.
 func (s *ServerPool) GetBackendByURL(u string) *Backend {
 	s.mux.RLock()
 	defer s.mux.RUnlock()
@@ -76,11 +105,11 @@ func (s *ServerPool) GetBackendByURL(u string) *Backend {
 	return nil
 }
 
+// GetBackendByIdentifier resolves a ?node= query value: 1-based index, full URL, or hostname.
 func (s *ServerPool) GetBackendByIdentifier(id string) *Backend {
 	s.mux.RLock()
 	defer s.mux.RUnlock()
 
-	// Try as 1-based index
 	var idx int
 	if _, err := fmt.Sscanf(id, "%d", &idx); err == nil {
 		if idx > 0 && idx <= len(s.backends) {
@@ -100,6 +129,20 @@ var serverPool ServerPool
 
 const stickyCookieName = "SERVERID"
 
+var backendCounter uint64
+
+func newBackendID() string {
+	return fmt.Sprintf("b%d", atomic.AddUint64(&backendCounter, 1))
+}
+
+func setCookie(w http.ResponseWriter, backend *Backend) {
+	http.SetCookie(w, &http.Cookie{
+		Name:  stickyCookieName,
+		Value: backend.ID,
+		Path:  "/",
+	})
+}
+
 func lbHandler(w http.ResponseWriter, r *http.Request) {
 	var backend *Backend
 
@@ -112,19 +155,14 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 			backend = nil
 		}
 		if backend != nil {
-			// Update sticky cookie to match forced node
-			http.SetCookie(w, &http.Cookie{
-				Name:  stickyCookieName,
-				Value: backend.URL.String(),
-				Path:  "/",
-			})
+			setCookie(w, backend)
 		}
 	}
 
 	// Check for sticky cookie
 	if backend == nil {
 		if cookie, err := r.Cookie(stickyCookieName); err == nil {
-			backend = serverPool.GetBackendByURL(cookie.Value)
+			backend = serverPool.GetBackendByID(cookie.Value)
 			if backend != nil && !backend.IsAlive() {
 				backend = nil
 			}
@@ -137,12 +175,7 @@ func lbHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		// Set sticky cookie
-		http.SetCookie(w, &http.Cookie{
-			Name:  stickyCookieName,
-			Value: backend.URL.String(),
-			Path:  "/",
-		})
+		setCookie(w, backend)
 	}
 
 	if strings.ToLower(r.Header.Get("Upgrade")) == "websocket" {
@@ -185,7 +218,6 @@ func main() {
 
 func healthCheck() {
 	for {
-		// Dynamic discovery if DISCOVERY_SERVICE is set
 		serviceName := os.Getenv("DISCOVERY_SERVICE")
 		if serviceName != "" {
 			refreshBackends(serviceName)
@@ -205,6 +237,8 @@ func healthCheck() {
 }
 
 func refreshBackends(serviceName string) {
+	activeURLs := make(map[string]bool)
+
 	_, addrs, err := net.LookupSRV("", "", serviceName)
 	if err != nil {
 		// Fallback to A record lookup if SRV fails (common in simple Docker DNS)
@@ -212,28 +246,24 @@ func refreshBackends(serviceName string) {
 		if err != nil {
 			return
 		}
-
 		for _, ip := range ips {
-			u := &url.URL{
-				Scheme: "http",
-				Host:   fmt.Sprintf("%s:8080", ip.String()),
-			}
+			u := &url.URL{Scheme: "http", Host: fmt.Sprintf("%s:8080", ip.String())}
+			activeURLs[u.String()] = true
 			if serverPool.GetBackendByURL(u.String()) == nil {
 				addBackend(u)
 			}
 		}
-		return
+	} else {
+		for _, addr := range addrs {
+			u := &url.URL{Scheme: "http", Host: fmt.Sprintf("%s:%d", addr.Target, addr.Port)}
+			activeURLs[u.String()] = true
+			if serverPool.GetBackendByURL(u.String()) == nil {
+				addBackend(u)
+			}
+		}
 	}
 
-	for _, addr := range addrs {
-		u := &url.URL{
-			Scheme: "http",
-			Host:   fmt.Sprintf("%s:%d", addr.Target, addr.Port),
-		}
-		if serverPool.GetBackendByURL(u.String()) == nil {
-			addBackend(u)
-		}
-	}
+	serverPool.RemoveBackendsNotIn(activeURLs)
 }
 
 func addBackend(target *url.URL) {
@@ -245,12 +275,13 @@ func addBackend(target *url.URL) {
 	}
 
 	backend := &Backend{
+		ID:           newBackendID(),
 		URL:          target,
 		ReverseProxy: proxy,
 		Alive:        true,
 	}
 	serverPool.AddBackend(backend)
-	log.Printf("Added new backend: %s", target)
+	log.Printf("Added new backend: %s (id=%s)", target, backend.ID)
 }
 
 func isBackendAlive(u *url.URL) bool {
